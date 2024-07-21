@@ -1,0 +1,41 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'phrase_search'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=phrase_search",
+                    "--package=phrase_search"
+                ],
+                "filter": {
+                    "name": "phrase_search",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                // "index-folder",
+                // "./data1",
+                // "./db",
+                // "1",
+                // "2147483648",
+                // "0",
+                // "0",
+                // "5000000"
+
+                "search",
+                "1",
+                "./queries.txt",
+                "./db3",
+                "2147483648",
+            ],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
