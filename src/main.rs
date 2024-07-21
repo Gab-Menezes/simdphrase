@@ -10,6 +10,7 @@ use rayon::{
     iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator},
     slice::ParallelSlice,
 };
+use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::BTreeSet, fs::OpenOptions, io::Write, iter::{Enumerate, Peekable}, path::PathBuf, process::{Command, Stdio}, str::FromStr, sync::{atomic::{AtomicU32, Ordering::Relaxed}, RwLock}};
 
 use ahash::{AHashSet, HashSet};
@@ -149,10 +150,11 @@ fn search(args: Search) {
 
             let b = std::time::Instant::now();
 
-            let doc_ids = dbs
+            let doc_ids: Vec<_> = dbs
             .par_iter()
             .map(|db| db.search(q))
-            .reduce(|| RoaringBitmap::new(), |a, b| a | b);
+            .flatten()
+            .collect();
             sum_micros += b.elapsed().as_micros();
             res = res.max(doc_ids.len());
         }

@@ -32,7 +32,7 @@
                 "search",
                 "1",
                 "./queries.txt",
-                "./db3",
+                "./db",
                 "2147483648",
             ],
             "cwd": "${workspaceFolder}"

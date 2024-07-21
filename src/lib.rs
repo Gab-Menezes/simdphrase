@@ -1,6 +1,7 @@
 #![feature(hash_raw_entry)]
 #![feature(array_windows)]
 #![feature(iter_intersperse)]
+#![feature(new_uninit)]
 
 mod indexer;
 mod db;

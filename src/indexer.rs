@@ -13,7 +13,7 @@ pub struct Indexer<'a, 'b> {
     next_token_id: u32,
     token_to_token_id: AHashMap<Box<str>, u32>,
     token_id_to_freq: Vec<(u32, u32)>,
-    token_id_doc_id_to_positions: FxHashMap<(u32, u32), RoaringBitmap>,
+    token_id_doc_id_to_positions: FxHashMap<(u32, u32), Vec<u32>>,
 
     token_id_to_token: Vec<Box<str>>,
 

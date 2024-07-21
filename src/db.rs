@@ -16,10 +16,10 @@ use heed::{
 use roaring::RoaringBitmap;
 
 use crate::{
-    codecs::{BigEndianVariableOption, BincodeCodec},
+    codecs::{LittleEndianFixOption, LittleEndianVariableOption, BincodeCodec, UnsafeBigEndianFixOptionCodec},
     document::Document,
     indexer::Indexer,
-    pl::{PostingList, PostingListCodec},
+    pl::{PostingList, UnsafePostingList},
     utils::MAX_SEQ_LEN,
 };
 
@@ -36,10 +36,11 @@ pub struct ShardsInfo {
 pub struct DB {
     pub(crate) env: Env,
     db_doc_id_to_document:
-        Database<U32<BigEndian>, BincodeCodec<Document, BigEndianVariableOption>>,
+        Database<U32<BigEndian>, BincodeCodec<Document, LittleEndianVariableOption>>,
 
     db_token_to_token_id: Database<Str, U32<BigEndian>>,
-    db_token_id_to_posting_list: Database<U32<BigEndian>, PostingListCodec>,
+    db_token_id_to_posting_list:
+        Database<U32<BigEndian>, BincodeCodec<PostingList, LittleEndianFixOption>>,
     db_common_token_id_to_token: Database<U32<BigEndian>, Str>,
 
     common_tokens: AHashSet<Box<str>>,
@@ -210,7 +211,7 @@ impl DB {
     pub(crate) fn write_postings_list(
         &self,
         rwtxn: &mut RwTxn,
-        token_id_doc_id_to_positions: FxHashMap<(u32, u32), RoaringBitmap>,
+        token_id_doc_id_to_positions: FxHashMap<(u32, u32), Vec<u32>>,
         number_of_tokens: usize,
     ) {
         let mut token_id_to_doc_ids_and_pos = vec![Vec::new(); number_of_tokens];
@@ -226,7 +227,7 @@ impl DB {
 
         for (token_id, doc_ids_and_pos) in token_id_to_doc_ids_and_pos.into_iter().enumerate() {
             let token_id = token_id as u32;
-            let mut doc_ids = RoaringBitmap::new();
+            let mut doc_ids = Vec::new();
             let mut positions = Vec::new();
 
             for (doc_id, pos) in doc_ids_and_pos {
@@ -363,7 +364,7 @@ impl DB {
     pub(crate) fn begin_phrase_search(
         tokens: &[String],
         token_to_token_id: &AHashMap<&str, u32>,
-        token_id_to_positions: &FxHashMap<u32, &RoaringBitmap>,
+        token_id_to_positions: &FxHashMap<u32, &[u32]>,
         query_len: usize,
     ) -> bool {
         let mut it = tokens.iter();
@@ -371,14 +372,17 @@ impl DB {
         let token = it.next().unwrap();
         let token_id = token_to_token_id.get(token.as_str()).unwrap();
         let positions = token_id_to_positions.get(token_id).unwrap();
-        let u = positions.min().unwrap();
+        let u = positions.first().unwrap();
         let mut v = u;
 
         for token in it {
             let token_id = token_to_token_id.get(token.as_str()).unwrap();
             let positions = token_id_to_positions.get(token_id).unwrap();
-            let rank = positions.rank(v) as u32;
-            let Some(next) = positions.select(rank) else {
+            let idx = match positions.binary_search(v) {
+                Ok(idx) => idx + 1,
+                Err(idx) => idx,
+            };
+            let Some(next) = positions.get(idx) else {
                 return false;
             };
             v = next
@@ -401,7 +405,7 @@ impl DB {
     fn phrase_search<'a, 'b: 'a>(
         tokens: &[String],
         token_to_token_id: &AHashMap<&str, u32>,
-        token_id_to_positions: &FxHashMap<u32, &RoaringBitmap>,
+        token_id_to_positions: &FxHashMap<u32, &[u32]>,
         mut position: u32,
         query_len: usize,
     ) -> bool {
@@ -411,8 +415,11 @@ impl DB {
             let token = it.next().unwrap();
             let token_id = token_to_token_id.get(token.as_str()).unwrap();
             let positions = token_id_to_positions.get(token_id).unwrap();
-            let rank = positions.rank(position) as u32;
-            let Some(next) = positions.select(rank) else {
+            let idx = match positions.binary_search(&position) {
+                Ok(idx) => idx + 1,
+                Err(idx) => idx,
+            };
+            let Some(next) = positions.get(idx) else {
                 return false;
             };
             let u = next;
@@ -421,8 +428,11 @@ impl DB {
             for token in it {
                 let token_id = token_to_token_id.get(token.as_str()).unwrap();
                 let positions = token_id_to_positions.get(token_id).unwrap();
-                let rank = positions.rank(v) as u32;
-                let Some(next) = positions.select(rank) else {
+                let idx = match positions.binary_search(v) {
+                    Ok(idx) => idx + 1,
+                    Err(idx) => idx,
+                };
+                let Some(next) = positions.get(idx) else {
                     return false;
                 };
                 v = next
@@ -440,19 +450,15 @@ impl DB {
         &self,
         rotxn: &RoTxn,
         tokens: &[T],
-    ) -> RoaringBitmap {
+    ) -> Vec<u32> {
         let token = tokens.first().unwrap().as_ref();
         let Some(token_id) = self.db_token_to_token_id.get(&rotxn, token).unwrap() else {
-            return RoaringBitmap::new();
+            return Vec::new();
         };
 
-        let pl = self
-            .db_token_id_to_posting_list
-            .get(&rotxn, &token_id)
-            .unwrap()
-            .unwrap();
+        let pl = self.get_posting_list(rotxn, token_id);
 
-        return pl.doc_ids;
+        return pl.doc_ids.to_vec();
     }
 
     pub fn get_documents_by_ids(&self, doc_ids: RoaringBitmap) -> Vec<String> {
@@ -474,8 +480,9 @@ impl DB {
         self.db_token_to_token_id.get(&rotxn, token).unwrap()
     }
 
-    pub(crate) fn get_posting_list(&self, rotxn: &RoTxn, token_id: u32) -> PostingList {
+    pub(crate) fn get_posting_list<'a>(&self, rotxn: &'a RoTxn, token_id: u32) -> UnsafePostingList<'a> {
         self.db_token_id_to_posting_list
+            .remap_data_type::<UnsafeBigEndianFixOptionCodec>()
             .get(&rotxn, &token_id)
             .unwrap()
             .unwrap()

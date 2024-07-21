@@ -4,19 +4,22 @@ use ahash::{AHashMap, AHashSet, HashMapExt};
 use fxhash::FxHashMap;
 use roaring::RoaringBitmap;
 
-use crate::{db::DB, utils::{normalize, tokenize}};
+use crate::{
+    db::DB,
+    utils::{normalize, tokenize},
+};
 
 pub trait KeywordSearch {
-    fn search(&self, q: &str) -> RoaringBitmap;
+    fn search(&self, q: &str) -> Vec<u32>;
 }
 
 impl KeywordSearch for DB {
-    fn search(&self, q: &str) -> RoaringBitmap {
+    fn search(&self, q: &str) -> Vec<u32> {
         let q = normalize(q);
         let tokens: Vec<_> = tokenize(&q).collect();
 
         if tokens.len() == 0 {
-            return RoaringBitmap::new();
+            return Vec::new();
         }
 
         let rotxn = self.env.read_txn().unwrap();
@@ -38,7 +41,7 @@ impl KeywordSearch for DB {
         let mut final_tokens_repr = Vec::with_capacity(final_tokens.len());
         for token in deduped_tokens.iter() {
             let Some(token_id) = self.get_token_id(&rotxn, token) else {
-                return RoaringBitmap::new();
+                return Vec::new();
             };
 
             let pl = self.get_posting_list(&rotxn, token_id);
@@ -53,9 +56,9 @@ impl KeywordSearch for DB {
             let pl = token_id_to_posting_list.get(token_id).unwrap();
             let mut token_id_to_positions = FxHashMap::new();
 
-            let mut doc_ids = RoaringBitmap::new();
+            let mut doc_ids = Vec::new();
             for (doc_id, positions) in pl.doc_ids.iter().zip(pl.positions.iter()) {
-                token_id_to_positions.insert(*token_id, positions);
+                token_id_to_positions.insert(*token_id, positions.as_ref());
 
                 if Self::begin_phrase_search(
                     &final_tokens,
@@ -63,7 +66,7 @@ impl KeywordSearch for DB {
                     &token_id_to_positions,
                     query_len,
                 ) {
-                    doc_ids.push(doc_id);
+                    doc_ids.push(*doc_id);
                 }
             }
 
@@ -88,7 +91,7 @@ impl KeywordSearch for DB {
             positionss.push(positions);
         }
 
-        let mut doc_ids = RoaringBitmap::new();
+        let mut doc_ids = Vec::new();
 
         'outer: loop {
             let Some(current_doc_id) = its.first_mut().unwrap().next() else {
@@ -126,7 +129,7 @@ impl KeywordSearch for DB {
                     token_ids.iter().zip(its.iter().zip(positionss.iter()))
                 {
                     let idx = positions.len() - it.len() - 1;
-                    token_id_to_positions.insert(*token_id, &positions[idx]);
+                    token_id_to_positions.insert(*token_id, positions[idx].as_ref());
                 }
 
                 if Self::begin_phrase_search(
@@ -135,7 +138,7 @@ impl KeywordSearch for DB {
                     &token_id_to_positions,
                     query_len,
                 ) {
-                    doc_ids.push(current_doc_id);
+                    doc_ids.push(*current_doc_id);
                 }
             } else {
                 for (j, it) in its.iter_mut().enumerate() {
