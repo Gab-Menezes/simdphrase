@@ -300,6 +300,8 @@ impl DB {
 
         rotxn.commit().unwrap();
 
+        println!("Common tokens {shard_id}: {common_tokens:?}");
+
         Self {
             env,
             db_doc_id_to_document,
@@ -383,57 +385,54 @@ impl DB {
         }
 
         if (v - u) as usize == query_len - 1 {
-            return true;
+            true
         } else {
-            return Self::phrase_search(
+            Self::phrase_search(
                 tokens,
                 token_to_token_id,
                 token_id_to_positions,
                 v - query_len as u32,
                 query_len,
-            );
+            )
         }
     }
 
+    #[inline(always)]
     fn phrase_search<'a, 'b: 'a>(
         tokens: &[String],
         token_to_token_id: &AHashMap<&str, u32>,
         token_id_to_positions: &FxHashMap<u32, &RoaringBitmap>,
-        position: u32,
+        mut position: u32,
         query_len: usize,
     ) -> bool {
-        let mut it = tokens.iter();
+        loop {
+            let mut it = tokens.iter();
 
-        let token = it.next().unwrap();
-        let token_id = token_to_token_id.get(token.as_str()).unwrap();
-        let positions = token_id_to_positions.get(token_id).unwrap();
-        let rank = positions.rank(position) as u32;
-        let Some(next) = positions.select(rank) else {
-            return false;
-        };
-        let u = next;
-        let mut v = u;
-
-        for token in it {
+            let token = it.next().unwrap();
             let token_id = token_to_token_id.get(token.as_str()).unwrap();
             let positions = token_id_to_positions.get(token_id).unwrap();
-            let rank = positions.rank(v) as u32;
+            let rank = positions.rank(position) as u32;
             let Some(next) = positions.select(rank) else {
                 return false;
             };
-            v = next
-        }
+            let u = next;
+            let mut v = u;
 
-        if (v - u) as usize == query_len - 1 {
-            return true;
-        } else {
-            return Self::phrase_search(
-                tokens,
-                token_to_token_id,
-                token_id_to_positions,
-                v - query_len as u32,
-                query_len,
-            );
+            for token in it {
+                let token_id = token_to_token_id.get(token.as_str()).unwrap();
+                let positions = token_id_to_positions.get(token_id).unwrap();
+                let rank = positions.rank(v) as u32;
+                let Some(next) = positions.select(rank) else {
+                    return false;
+                };
+                v = next
+            }
+
+            if (v - u) as usize == query_len - 1 {
+                return true;
+            }
+
+            position = v - query_len as u32;
         }
     }
 

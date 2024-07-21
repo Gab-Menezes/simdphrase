@@ -97,19 +97,20 @@ fn index_folder(args: IndexFolder) {
     .for_each(|files| {
         let shard_id = next_shard_id.fetch_add(1, Relaxed);
         
-        println!("\tStart: {shard_id}");
+        println!("Start: {shard_id}");
         let b = std::time::Instant::now();
         let db = DB::truncate(&args.index_name, shard_id, args.db_size);
         let indexer = db.indexer(&next_doc_id);
         let (docs_in_shard, last_doc_id) = indexer.index(files);
         let next_doc_id = next_doc_id.load(Relaxed);
-        println!("\tEnd:   {shard_id} ({:?}) (#docs: {docs_in_shard} | last doc id: {last_doc_id} | next doc id: {next_doc_id})", b.elapsed());
+        println!("End:   {shard_id} ({:?}) (#docs: {docs_in_shard} | last doc id: {last_doc_id} | next doc id: {next_doc_id})", b.elapsed());
 
         if next_doc_id >= args.max_doc_id {
             println!("Max doc id reached");
             return;
         }
     });
+    println!();
     println!("Whole Indexing took {:?}", b.elapsed());
 }
 
@@ -128,7 +129,9 @@ fn search(args: Search) {
     })
     .collect();
 
+    println!();
     println!("Opening database took: {:?}", b.elapsed());
+    println!();
 
     let queries = std::fs::read_to_string(args.queries).unwrap();
 

@@ -114,7 +114,7 @@ impl<'a, 'b> Indexer<'a, 'b> {
     }
 
     fn generate_common_tokens(&mut self, token_id_reprs: Vec<Vec<u32>>) -> FxHashSet<u32> {
-        let max = (self.token_id_to_freq.len() as f64 * 0.00001f64) as usize;
+        let max = (self.token_id_to_freq.len() as f64 * 0.00002f64) as usize;
         self.token_id_to_freq
             .sort_unstable_by_key(|(_, freq)| Reverse(*freq));
         let common_token_ids: FxHashSet<_> = self.token_id_to_freq[0..max]
