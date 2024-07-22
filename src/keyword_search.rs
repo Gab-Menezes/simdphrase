@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cell::UnsafeCell, cmp::Ordering};
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
 use fxhash::FxHashMap;
@@ -38,7 +38,6 @@ impl KeywordSearch for DB {
         let deduped_tokens: AHashSet<_> = final_tokens.iter().collect();
         let mut token_to_token_id = AHashMap::with_capacity(deduped_tokens.len());
         let mut token_id_to_posting_list = FxHashMap::with_capacity(deduped_tokens.len());
-        let mut final_tokens_repr = Vec::with_capacity(final_tokens.len());
         for token in deduped_tokens.iter() {
             let Some(token_id) = self.get_token_id(&rotxn, token) else {
                 return Vec::new();
@@ -48,47 +47,21 @@ impl KeywordSearch for DB {
 
             token_to_token_id.insert(token.as_str(), token_id);
             token_id_to_posting_list.insert(token_id, pl);
-            final_tokens_repr.push(token_id);
         }
 
-        if token_id_to_posting_list.len() == 1 {
-            let token_id = final_tokens_repr.first().unwrap();
-            let pl = token_id_to_posting_list.get(token_id).unwrap();
-            let mut token_id_to_positions = FxHashMap::new();
-
-            let mut doc_ids = Vec::new();
-            for (doc_id, positions) in pl.doc_ids.iter().zip(pl.positions.iter()) {
-                token_id_to_positions.insert(*token_id, positions.as_ref());
-
-                if Self::begin_phrase_search(
-                    &final_tokens,
-                    &token_to_token_id,
-                    &token_id_to_positions,
-                    query_len,
-                ) {
-                    doc_ids.push(*doc_id);
-                }
-            }
-
-            return doc_ids;
-        }
-
-        let mut temp: Vec<_> = token_id_to_posting_list
-            .iter()
-            .map(|(token_id, pl)| (*token_id, pl.doc_ids.iter().peekable(), &pl.positions))
-            .collect();
-        temp.sort_unstable_by_key(|(_, it, _)| it.len());
 
         // let's do a vec instead of a hashmap, since the number of total
         // tokens is probably low
-        let mut token_ids = Vec::with_capacity(temp.len());
-        let mut its = Vec::with_capacity(temp.len());
-        let mut positionss = Vec::with_capacity(temp.len());
-        let mut token_id_to_positions = FxHashMap::with_capacity(temp.len());
-        for (token_id, it, positions) in temp {
+        let mut token_ids = Vec::with_capacity(final_tokens.len());
+        let mut its = Vec::with_capacity(final_tokens.len());
+        let mut positionss = Vec::with_capacity(final_tokens.len());
+        for t in final_tokens.iter() {
+            let token_id = token_to_token_id.get(t.as_str()).unwrap();
+            let pl = token_id_to_posting_list.get(token_id).unwrap();
+
             token_ids.push(token_id);
-            its.push(it);
-            positionss.push(positions);
+            its.push(pl.doc_ids.iter().peekable());
+            positionss.push(&pl.positions);
         }
 
         let mut doc_ids = Vec::new();
@@ -98,13 +71,16 @@ impl KeywordSearch for DB {
                 break;
             };
 
+            let current_doc_id = *current_doc_id;
             let mut max = current_doc_id;
             let mut i = 0;
+
             'inner: for (j, it) in its.iter_mut().enumerate().skip(1) {
                 loop {
                     let Some(doc_id) = it.peek() else {
                         break 'outer;
                     };
+                    let doc_id = **doc_id;
 
                     match doc_id.cmp(&max) {
                         Ordering::Less => {
@@ -116,7 +92,7 @@ impl KeywordSearch for DB {
                             continue 'inner;
                         }
                         Ordering::Greater => {
-                            max = *doc_id;
+                            max = doc_id;
                             i = j;
                             break 'inner;
                         }
@@ -125,20 +101,12 @@ impl KeywordSearch for DB {
             }
 
             if current_doc_id == max {
-                for (token_id, (it, positions)) in
-                    token_ids.iter().zip(its.iter().zip(positionss.iter()))
-                {
-                    let idx = positions.len() - it.len() - 1;
-                    token_id_to_positions.insert(*token_id, positions[idx].as_ref());
-                }
-
                 if Self::begin_phrase_search(
-                    &final_tokens,
-                    &token_to_token_id,
-                    &token_id_to_positions,
+                    &its,
+                    &positionss,
                     query_len,
                 ) {
-                    doc_ids.push(*current_doc_id);
+                    doc_ids.push(current_doc_id);
                 }
             } else {
                 for (j, it) in its.iter_mut().enumerate() {
@@ -151,7 +119,7 @@ impl KeywordSearch for DB {
                             break 'outer;
                         };
 
-                        if *doc_id < max {
+                        if **doc_id < max {
                             it.next();
                         } else {
                             break;

@@ -1,10 +1,5 @@
 use std::{
-    cmp::Reverse,
-    fs::{DirEntry, OpenOptions},
-    io::{Error, Write},
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::atomic::AtomicU32,
+    cell::UnsafeCell, cmp::Reverse, fs::{DirEntry, OpenOptions}, io::{Error, Write}, iter::{Peekable, Zip}, path::{Path, PathBuf}, slice::Iter, str::FromStr, sync::atomic::AtomicU32
 };
 
 use ahash::{AHashMap, AHashSet};
@@ -389,39 +384,37 @@ impl DB {
     }
 
     pub(crate) fn begin_phrase_search(
-        tokens: &[String],
-        token_to_token_id: &AHashMap<&str, u32>,
-        token_id_to_positions: &FxHashMap<u32, &[u32]>,
+        its: &[Peekable<Iter<u32>>],
+        positionss: &[&Box<[&[u32]]>],
         query_len: usize,
     ) -> bool {
-        let mut it = tokens.iter();
+        let mut zipped_it = its.iter().zip(positionss);
 
-        let token = it.next().unwrap();
-        let token_id = token_to_token_id.get(token.as_str()).unwrap();
-        let positions = token_id_to_positions.get(token_id).unwrap();
-        let u = positions.first().unwrap();
+        let (it, positions) = zipped_it.next().unwrap();
+        let idx = positions.len() - it.len() - 1;
+        let positions = positions[idx].as_ref();
+        let u = *positions.first().unwrap();
         let mut v = u;
 
-        for token in it {
-            let token_id = token_to_token_id.get(token.as_str()).unwrap();
-            let positions = token_id_to_positions.get(token_id).unwrap();
-            let idx = match positions.binary_search(v) {
+        for (it, positions) in zipped_it {
+            let idx = positions.len() - it.len() - 1;
+            let positions = positions[idx].as_ref();
+            let idx = match positions.binary_search(&v) {
                 Ok(idx) => idx + 1,
                 Err(idx) => idx,
             };
             let Some(next) = positions.get(idx) else {
                 return false;
             };
-            v = next
+            v = *next
         }
 
         if (v - u) as usize == query_len - 1 {
             true
         } else {
             Self::phrase_search(
-                tokens,
-                token_to_token_id,
-                token_id_to_positions,
+                its,
+                positionss,
                 v - query_len as u32,
                 query_len,
             )
@@ -430,18 +423,18 @@ impl DB {
 
     #[inline(always)]
     fn phrase_search<'a, 'b: 'a>(
-        tokens: &[String],
-        token_to_token_id: &AHashMap<&str, u32>,
-        token_id_to_positions: &FxHashMap<u32, &[u32]>,
+        its: &[Peekable<Iter<u32>>],
+        positionss: &[&Box<[&[u32]]>],
         mut position: u32,
         query_len: usize,
     ) -> bool {
         loop {
-            let mut it = tokens.iter();
+            let mut zipped_it = its.iter().zip(positionss);
 
-            let token = it.next().unwrap();
-            let token_id = token_to_token_id.get(token.as_str()).unwrap();
-            let positions = token_id_to_positions.get(token_id).unwrap();
+            let (it, positions) = zipped_it.next().unwrap();
+            let idx = positions.len() - it.len() - 1;
+            let positions = positions[idx].as_ref();
+    
             let idx = match positions.binary_search(&position) {
                 Ok(idx) => idx + 1,
                 Err(idx) => idx,
@@ -449,20 +442,20 @@ impl DB {
             let Some(next) = positions.get(idx) else {
                 return false;
             };
-            let u = next;
+            let u = *next;
             let mut v = u;
 
-            for token in it {
-                let token_id = token_to_token_id.get(token.as_str()).unwrap();
-                let positions = token_id_to_positions.get(token_id).unwrap();
-                let idx = match positions.binary_search(v) {
+            for (it, positions) in zipped_it {
+                let idx = positions.len() - it.len() - 1;
+                let positions = positions[idx].as_ref();
+                let idx = match positions.binary_search(&v) {
                     Ok(idx) => idx + 1,
                     Err(idx) => idx,
                 };
                 let Some(next) = positions.get(idx) else {
                     return false;
                 };
-                v = next
+                v = *next
             }
 
             if (v - u) as usize == query_len - 1 {
