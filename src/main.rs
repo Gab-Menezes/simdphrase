@@ -1,20 +1,15 @@
 #![feature(new_uninit)]
 
-use bincode::{
-    config::{BigEndian, WithOtherEndian},
-    DefaultOptions, Options,
-};
 use clap::{Args, Parser, Subcommand};
-use phrase_search::{KeywordSearch, ShardsInfo, DB};
+use phrase_search::{KeywordSearch, DB};
 use rayon::{
-    iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelBridge, ParallelIterator},
+    iter::{IntoParallelRefIterator, ParallelIterator},
     slice::ParallelSlice,
 };
-use serde::{Deserialize, Serialize};
-use std::{borrow::{Borrow, Cow}, cmp::Ordering, collections::BTreeSet, fs::OpenOptions, io::Write, iter::{Enumerate, Peekable}, path::PathBuf, process::{Command, Stdio}, str::FromStr, sync::{atomic::{AtomicU32, Ordering::Relaxed}, RwLock}};
+use rkyv::{ser::{serializers::{AlignedSerializer, AllocScratch, AllocSerializer, CompositeSerializer, FallbackScratch, HeapScratch, ScratchTracker, SharedSerializeMap}, Serializer}, AlignedVec};
+use std::{path::PathBuf, process::{Command, Stdio}, sync::{atomic::{AtomicU32, Ordering::Relaxed}}};
 
-use ahash::{AHashSet, HashSet};
-use roaring::RoaringBitmap;
+use ahash::{AHashSet};
 
 #[derive(Parser, Debug)]
 struct CommandArgs {

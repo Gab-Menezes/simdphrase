@@ -9,17 +9,11 @@ use heed::{
     types::{Str, U32},
     Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
 };
+use rkyv::vec::ArchivedVec;
 use roaring::RoaringBitmap;
 
 use crate::{
-    codecs::{
-        BincodeCodec, LittleEndianFixOption, LittleEndianVariableOption, NativeU32,
-        UnsafePostingListCodec,
-    },
-    document::Document,
-    indexer::Indexer,
-    pl::{PostingList, UnsafePostingList},
-    utils::MAX_SEQ_LEN,
+    codecs::{NativeU32, ZeroCopyCodec}, document::Document, indexer::Indexer, pl::{ArchivedPostingList, PostingList}, utils::MAX_SEQ_LEN
 };
 
 #[derive(Debug)]
@@ -34,11 +28,11 @@ pub struct ShardsInfo {
 #[derive(Debug)]
 pub struct DB {
     pub(crate) env: Env,
-    db_doc_id_to_document: Database<NativeU32, BincodeCodec<Document, LittleEndianVariableOption>>,
+    db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<Document, 256>>,
 
     db_token_to_token_id: Database<Str, NativeU32>,
     db_token_id_to_posting_list:
-        Database<NativeU32, BincodeCodec<PostingList, LittleEndianFixOption>>,
+        Database<NativeU32, ZeroCopyCodec<PostingList, 256>>,
     db_common_token_id_to_token: Database<NativeU32, Str>,
 
     common_tokens: AHashSet<Box<str>>,
@@ -64,7 +58,7 @@ impl DB {
 
         let db_doc_id_to_document = env
             .database_options()
-            .types::<NativeU32, BincodeCodec<Document, LittleEndianVariableOption>>()
+            .types::<NativeU32, ZeroCopyCodec<Document, 256>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("doc_id_to_document")
             .create(&mut wrtxn)
@@ -76,7 +70,7 @@ impl DB {
 
         let db_token_id_to_posting_list = env
             .database_options()
-            .types::<NativeU32, BincodeCodec<PostingList, LittleEndianFixOption>>()
+            .types::<NativeU32, ZeroCopyCodec<PostingList, 256>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("token_id_to_posting_list")
             .create(&mut wrtxn)
@@ -289,7 +283,7 @@ impl DB {
 
         let db_doc_id_to_document = env
             .database_options()
-            .types::<NativeU32, BincodeCodec<Document, LittleEndianVariableOption>>()
+            .types::<NativeU32, ZeroCopyCodec<Document, 256>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("doc_id_to_document")
             .open(&rotxn)
@@ -303,7 +297,7 @@ impl DB {
 
         let db_token_id_to_posting_list = env
             .database_options()
-            .types::<NativeU32, BincodeCodec<PostingList, LittleEndianFixOption>>()
+            .types::<NativeU32, ZeroCopyCodec<PostingList, 256>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("token_id_to_posting_list")
             .open(&rotxn)
@@ -385,7 +379,7 @@ impl DB {
 
     pub(crate) fn begin_phrase_search(
         its: &[Peekable<Iter<u32>>],
-        positionss: &[&Box<[&[u32]]>],
+        positionss: &[&ArchivedVec<ArchivedVec<u32>>],
         query_len: usize,
     ) -> bool {
         let mut zipped_it = its.iter().zip(positionss);
@@ -424,7 +418,7 @@ impl DB {
     #[inline(always)]
     fn phrase_search<'a, 'b: 'a>(
         its: &[Peekable<Iter<u32>>],
-        positionss: &[&Box<[&[u32]]>],
+        positionss: &[&ArchivedVec<ArchivedVec<u32>>],
         mut position: u32,
         query_len: usize,
     ) -> bool {
@@ -481,20 +475,20 @@ impl DB {
         return pl.doc_ids.to_vec();
     }
 
-    pub fn get_documents_by_ids(&self, doc_ids: RoaringBitmap) -> Vec<String> {
-        let rdtxn = self.env.read_txn().unwrap();
-        doc_ids
-            .into_iter()
-            .map(|doc_id| {
-                let doc = self
-                    .db_doc_id_to_document
-                    .get(&rdtxn, &doc_id)
-                    .unwrap()
-                    .unwrap();
-                serde_json::to_string(&doc).unwrap()
-            })
-            .collect()
-    }
+    // pub fn get_documents_by_ids(&self, doc_ids: RoaringBitmap) -> Vec<String> {
+    //     let rdtxn = self.env.read_txn().unwrap();
+    //     doc_ids
+    //         .into_iter()
+    //         .map(|doc_id| {
+    //             let doc = self
+    //                 .db_doc_id_to_document
+    //                 .get(&rdtxn, &doc_id)
+    //                 .unwrap()
+    //                 .unwrap();
+    //             serde_json::to_string(&doc).unwrap()
+    //         })
+    //         .collect()
+    // }
 
     pub(crate) fn get_token_id(&self, rotxn: &RoTxn, token: &str) -> Option<u32> {
         self.db_token_to_token_id.get(&rotxn, token).unwrap()
@@ -504,9 +498,8 @@ impl DB {
         &self,
         rotxn: &'a RoTxn,
         token_id: u32,
-    ) -> UnsafePostingList<'a> {
+    ) -> &'a ArchivedPostingList {
         self.db_token_id_to_posting_list
-            .remap_data_type::<UnsafePostingListCodec>()
             .get(&rotxn, &token_id)
             .unwrap()
             .unwrap()

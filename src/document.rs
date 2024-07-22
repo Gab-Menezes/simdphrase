@@ -1,6 +1,7 @@
-use serde::{Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Archive, Serialize, Deserialize, Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[archive_attr(derive(Debug))]
 pub struct Document {
     pub content: Option<String>,
 }

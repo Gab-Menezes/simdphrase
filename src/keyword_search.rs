@@ -49,17 +49,12 @@ impl KeywordSearch for DB {
             token_id_to_posting_list.insert(token_id, pl);
         }
 
-
-        // let's do a vec instead of a hashmap, since the number of total
-        // tokens is probably low
-        let mut token_ids = Vec::with_capacity(final_tokens.len());
         let mut its = Vec::with_capacity(final_tokens.len());
         let mut positionss = Vec::with_capacity(final_tokens.len());
         for t in final_tokens.iter() {
             let token_id = token_to_token_id.get(t.as_str()).unwrap();
             let pl = token_id_to_posting_list.get(token_id).unwrap();
 
-            token_ids.push(token_id);
             its.push(pl.doc_ids.iter().peekable());
             positionss.push(&pl.positions);
         }
