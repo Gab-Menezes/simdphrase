@@ -340,6 +340,7 @@ impl DB {
             .collect()
     }
 
+    #[inline(always)]
     pub(crate) fn merge_tokens(&self, tokens: &[&str]) -> Vec<String> {
         let mut final_tokens = Vec::with_capacity(tokens.len());
         let mut sequence = Vec::with_capacity(tokens.len());
@@ -377,89 +378,7 @@ impl DB {
         final_tokens
     }
 
-    pub(crate) fn begin_phrase_search(
-        its: &[Peekable<Iter<u32>>],
-        positionss: &[&ArchivedVec<ArchivedVec<u32>>],
-        query_len: usize,
-    ) -> bool {
-        let mut zipped_it = its.iter().zip(positionss);
-
-        let (it, positions) = zipped_it.next().unwrap();
-        let idx = positions.len() - it.len() - 1;
-        let positions = positions[idx].as_ref();
-        let u = *positions.first().unwrap();
-        let mut v = u;
-
-        for (it, positions) in zipped_it {
-            let idx = positions.len() - it.len() - 1;
-            let positions = positions[idx].as_ref();
-            let idx = match positions.binary_search(&v) {
-                Ok(idx) => idx + 1,
-                Err(idx) => idx,
-            };
-            let Some(next) = positions.get(idx) else {
-                return false;
-            };
-            v = *next
-        }
-
-        if (v - u) as usize == query_len - 1 {
-            true
-        } else {
-            Self::phrase_search(
-                its,
-                positionss,
-                v - query_len as u32,
-                query_len,
-            )
-        }
-    }
-
     #[inline(always)]
-    fn phrase_search<'a, 'b: 'a>(
-        its: &[Peekable<Iter<u32>>],
-        positionss: &[&ArchivedVec<ArchivedVec<u32>>],
-        mut position: u32,
-        query_len: usize,
-    ) -> bool {
-        loop {
-            let mut zipped_it = its.iter().zip(positionss);
-
-            let (it, positions) = zipped_it.next().unwrap();
-            let idx = positions.len() - it.len() - 1;
-            let positions = positions[idx].as_ref();
-    
-            let idx = match positions.binary_search(&position) {
-                Ok(idx) => idx + 1,
-                Err(idx) => idx,
-            };
-            let Some(next) = positions.get(idx) else {
-                return false;
-            };
-            let u = *next;
-            let mut v = u;
-
-            for (it, positions) in zipped_it {
-                let idx = positions.len() - it.len() - 1;
-                let positions = positions[idx].as_ref();
-                let idx = match positions.binary_search(&v) {
-                    Ok(idx) => idx + 1,
-                    Err(idx) => idx,
-                };
-                let Some(next) = positions.get(idx) else {
-                    return false;
-                };
-                v = *next
-            }
-
-            if (v - u) as usize == query_len - 1 {
-                return true;
-            }
-
-            position = v - query_len as u32;
-        }
-    }
-
     pub(crate) fn single_token_search<T: AsRef<str>>(
         &self,
         rotxn: &RoTxn,
@@ -491,17 +410,20 @@ impl DB {
     // }
 
     pub(crate) fn get_token_id(&self, rotxn: &RoTxn, token: &str) -> Option<u32> {
-        self.db_token_to_token_id.get(&rotxn, token).unwrap()
+        unsafe { self.db_token_to_token_id.get(&rotxn, token).unwrap_unchecked() }
     }
 
+    #[inline(always)]
     pub(crate) fn get_posting_list<'a>(
         &self,
         rotxn: &'a RoTxn,
         token_id: u32,
     ) -> &'a ArchivedPostingList {
-        self.db_token_id_to_posting_list
-            .get(&rotxn, &token_id)
-            .unwrap()
-            .unwrap()
+        unsafe {
+            self.db_token_id_to_posting_list
+                .get(&rotxn, &token_id)
+                .unwrap_unchecked()
+                .unwrap_unchecked()
+        }
     }
 }

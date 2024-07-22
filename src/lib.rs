@@ -2,6 +2,7 @@
 #![feature(array_windows)]
 #![feature(iter_intersperse)]
 #![feature(new_uninit)]
+#![feature(hint_assert_unchecked)]
 
 mod indexer;
 mod db;
