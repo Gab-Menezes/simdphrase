@@ -11,26 +11,10 @@ use rayon::{
     slice::ParallelSlice,
 };
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::BTreeSet, fs::OpenOptions, io::Write, iter::{Enumerate, Peekable}, path::PathBuf, process::{Command, Stdio}, str::FromStr, sync::{atomic::{AtomicU32, Ordering::Relaxed}, RwLock}};
+use std::{borrow::{Borrow, Cow}, cmp::Ordering, collections::BTreeSet, fs::OpenOptions, io::Write, iter::{Enumerate, Peekable}, path::PathBuf, process::{Command, Stdio}, str::FromStr, sync::{atomic::{AtomicU32, Ordering::Relaxed}, RwLock}};
 
 use ahash::{AHashSet, HashSet};
 use roaring::RoaringBitmap;
-
-// fn f(bytes: &[u8]) -> Box<[&[u32]]> {
-//     unsafe {
-//         let l = *(bytes.get_unchecked(0..4).as_ptr() as *const u32);
-//         let mut v: Box<[std::mem::MaybeUninit<&[u32]>]> = Box::new_uninit_slice(l as usize);
-//         let mut b = 4;
-//         for i in 0..l {
-//             let e = b + 4;
-//             let len = *(bytes.get_unchecked(b..e).as_ptr() as *const u32);
-//             let s = std::slice::from_raw_parts(bytes.as_ptr().add(e) as *const u32, len as usize);
-//             b = e + (len * 4) as usize;
-//             v[i as usize].as_mut_ptr().write(s);
-//         }
-//         v.assume_init()
-//     }
-// }
 
 #[derive(Parser, Debug)]
 struct CommandArgs {

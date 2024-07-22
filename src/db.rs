@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     fs::{DirEntry, OpenOptions},
     io::{Error, Write},
     path::{Path, PathBuf},
@@ -9,14 +10,17 @@ use std::{
 use ahash::{AHashMap, AHashSet};
 use fxhash::{FxHashMap, FxHashSet};
 use heed::{
-    byteorder::BigEndian,
+    byteorder::{BigEndian, LittleEndian},
     types::{Str, U32},
-    Database, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
+    Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
 };
 use roaring::RoaringBitmap;
 
 use crate::{
-    codecs::{LittleEndianFixOption, LittleEndianVariableOption, BincodeCodec, UnsafeBigEndianFixOptionCodec},
+    codecs::{
+        BincodeCodec, LittleEndianFixOption, LittleEndianVariableOption, NativeU32,
+        UnsafePostingListCodec,
+    },
     document::Document,
     indexer::Indexer,
     pl::{PostingList, UnsafePostingList},
@@ -35,13 +39,12 @@ pub struct ShardsInfo {
 #[derive(Debug)]
 pub struct DB {
     pub(crate) env: Env,
-    db_doc_id_to_document:
-        Database<U32<BigEndian>, BincodeCodec<Document, LittleEndianVariableOption>>,
+    db_doc_id_to_document: Database<NativeU32, BincodeCodec<Document, LittleEndianVariableOption>>,
 
-    db_token_to_token_id: Database<Str, U32<BigEndian>>,
+    db_token_to_token_id: Database<Str, NativeU32>,
     db_token_id_to_posting_list:
-        Database<U32<BigEndian>, BincodeCodec<PostingList, LittleEndianFixOption>>,
-    db_common_token_id_to_token: Database<U32<BigEndian>, Str>,
+        Database<NativeU32, BincodeCodec<PostingList, LittleEndianFixOption>>,
+    db_common_token_id_to_token: Database<NativeU32, Str>,
 
     common_tokens: AHashSet<Box<str>>,
 }
@@ -65,19 +68,31 @@ impl DB {
         let mut wrtxn = env.write_txn().unwrap();
 
         let db_doc_id_to_document = env
-            .create_database(&mut wrtxn, Some("doc_id_to_document"))
+            .database_options()
+            .types::<NativeU32, BincodeCodec<Document, LittleEndianVariableOption>>()
+            .flags(DatabaseFlags::REVERSE_KEY)
+            .name("doc_id_to_document")
+            .create(&mut wrtxn)
             .unwrap();
 
-        let db_token_to_token_id: Database<Str, U32<BigEndian>> = env
+        let db_token_to_token_id = env
             .create_database(&mut wrtxn, Some("token_to_token_id"))
             .unwrap();
 
         let db_token_id_to_posting_list = env
-            .create_database(&mut wrtxn, Some("token_id_to_posting_list"))
+            .database_options()
+            .types::<NativeU32, BincodeCodec<PostingList, LittleEndianFixOption>>()
+            .flags(DatabaseFlags::REVERSE_KEY)
+            .name("token_id_to_posting_list")
+            .create(&mut wrtxn)
             .unwrap();
 
         let db_common_token_id_to_token = env
-            .create_database(&mut wrtxn, Some("common_token_id_to_token"))
+            .database_options()
+            .types::<NativeU32, Str>()
+            .flags(DatabaseFlags::REVERSE_KEY)
+            .name("common_token_id_to_token")
+            .create(&mut wrtxn)
             .unwrap();
 
         wrtxn.commit().unwrap();
@@ -278,7 +293,11 @@ impl DB {
         let rotxn = env.read_txn().unwrap();
 
         let db_doc_id_to_document = env
-            .open_database(&rotxn, Some("doc_id_to_document"))
+            .database_options()
+            .types::<NativeU32, BincodeCodec<Document, LittleEndianVariableOption>>()
+            .flags(DatabaseFlags::REVERSE_KEY)
+            .name("doc_id_to_document")
+            .open(&rotxn)
             .unwrap()
             .unwrap();
 
@@ -288,12 +307,20 @@ impl DB {
             .unwrap();
 
         let db_token_id_to_posting_list = env
-            .open_database(&rotxn, Some("token_id_to_posting_list"))
+            .database_options()
+            .types::<NativeU32, BincodeCodec<PostingList, LittleEndianFixOption>>()
+            .flags(DatabaseFlags::REVERSE_KEY)
+            .name("token_id_to_posting_list")
+            .open(&rotxn)
             .unwrap()
             .unwrap();
 
         let db_common_token_id_to_token = env
-            .open_database(&rotxn, Some("common_token_id_to_token"))
+            .database_options()
+            .types::<NativeU32, Str>()
+            .flags(DatabaseFlags::REVERSE_KEY)
+            .name("common_token_id_to_token")
+            .open(&rotxn)
             .unwrap()
             .unwrap();
 
@@ -315,7 +342,7 @@ impl DB {
 
     fn read_common_tokens(
         rotxn: &RoTxn,
-        db_common_token_id_to_token: Database<U32<BigEndian>, Str>,
+        db_common_token_id_to_token: Database<NativeU32, Str>,
     ) -> AHashSet<Box<str>> {
         db_common_token_id_to_token
             .iter(rotxn)
@@ -480,9 +507,13 @@ impl DB {
         self.db_token_to_token_id.get(&rotxn, token).unwrap()
     }
 
-    pub(crate) fn get_posting_list<'a>(&self, rotxn: &'a RoTxn, token_id: u32) -> UnsafePostingList<'a> {
+    pub(crate) fn get_posting_list<'a>(
+        &self,
+        rotxn: &'a RoTxn,
+        token_id: u32,
+    ) -> UnsafePostingList<'a> {
         self.db_token_id_to_posting_list
-            .remap_data_type::<UnsafeBigEndianFixOptionCodec>()
+            .remap_data_type::<UnsafePostingListCodec>()
             .get(&rotxn, &token_id)
             .unwrap()
             .unwrap()
