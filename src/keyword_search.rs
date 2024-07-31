@@ -2,7 +2,7 @@ use std::{cell::UnsafeCell, cmp::Ordering, iter::Peekable, slice::Iter};
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
 use fxhash::FxHashMap;
-use rkyv::vec::ArchivedVec;
+use rkyv::{ser::serializers::AllocSerializer, vec::ArchivedVec, Deserialize, Infallible, Serialize};
 use roaring::RoaringBitmap;
 
 use crate::{
@@ -13,7 +13,11 @@ pub trait KeywordSearch {
     fn search(&self, q: &str) -> Vec<u32>;
 }
 
-impl KeywordSearch for DB {
+impl<D> KeywordSearch for DB<D> 
+where
+    D: Serialize<AllocSerializer<256>> + 'static,
+    D::Archived: Deserialize<D, Infallible>,
+{
     fn search(&self, q: &str) -> Vec<u32> {
         let q = normalize(q);
         let tokens: Vec<_> = tokenize(&q).collect();

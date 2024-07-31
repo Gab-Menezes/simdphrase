@@ -2,12 +2,13 @@ use std::{cmp::Reverse, path::PathBuf, sync::atomic::{AtomicU32, Ordering}};
 
 use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
+use rkyv::{ser::serializers::AllocSerializer, Serialize};
 use roaring::RoaringBitmap;
 
 use crate::{db::DB, document::Document, roaringish::MAX_VALUE, utils::{normalize, tokenize, MAX_SEQ_LEN}};
 
 #[derive(Debug)]
-pub struct Indexer<'a, 'b> {
+pub struct Indexer<'a, 'b, D: Serialize<AllocSerializer<256>>> {
     next_doc_id: &'a AtomicU32,
 
     next_token_id: u32,
@@ -19,13 +20,13 @@ pub struct Indexer<'a, 'b> {
 
     // this 2 containers are in sync
     doc_ids: Vec<u32>,
-    documents: Vec<Document>,
+    documents: Vec<D>,
 
-    db: &'b DB,
+    db: &'b DB<D>,
 }
 
-impl<'a, 'b> Indexer<'a, 'b> {
-    pub fn new(next_doc_id: &'a AtomicU32, db: &'b DB) -> Self {
+impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
+    pub fn new(next_doc_id: &'a AtomicU32, db: &'b DB<D>) -> Self {
         Self {
             next_doc_id,
             token_to_token_id: AHashMap::new(),
@@ -153,34 +154,32 @@ impl<'a, 'b> Indexer<'a, 'b> {
         return common_token_ids;
     }
 
-    pub fn index(mut self, files: &[PathBuf]) -> (u32, u32) {
+    pub fn index(mut self, docs: Vec<(String, D)>) -> (u32, u32) {
         let mut token_id_reprs = Vec::new();
         let mut last_doc_id = 0;
         let mut docs_in_shard = 0;
-        for file in files.iter() {
-            let text = std::fs::read_to_string(file).unwrap();
-
+        for (content, doc) in docs {
             docs_in_shard += 1;
             let doc_id = self.next_doc_id.fetch_add(1, Ordering::Relaxed);
             last_doc_id = doc_id;
 
             self.doc_ids.push(doc_id);
-            self.documents.push(file.to_str().unwrap().to_owned());
+            self.documents.push(doc);
 
             token_id_reprs.push(Vec::new());
             let token_id_repr = token_id_reprs.last_mut().unwrap();
 
-            self.index_doc(&text, doc_id, token_id_repr);
+            self.index_doc(&content, doc_id, token_id_repr);
         }
 
         // TODO: Fix
         let common_token_ids = FxHashSet::new();
         // let common_token_ids = self.generate_common_tokens(token_id_reprs);
-        self.flush(common_token_ids, files, docs_in_shard, last_doc_id);
+        self.flush(common_token_ids);
         (docs_in_shard, last_doc_id)
     }
 
-    fn flush(self, common_token_ids: FxHashSet<u32>, files: &[PathBuf], docs_in_shard: u32, last_doc_id: u32) {
+    fn flush(self, common_token_ids: FxHashSet<u32>) {
         let mut rwtxn = self.db.env.write_txn().unwrap();
 
         self.db
@@ -199,7 +198,5 @@ impl<'a, 'b> Indexer<'a, 'b> {
             .write_common_token_ids(&mut rwtxn, common_token_ids, &self.token_id_to_token);
 
         rwtxn.commit().unwrap();
-
-        self.db.write_files(files, docs_in_shard, last_doc_id);
     }
 }
