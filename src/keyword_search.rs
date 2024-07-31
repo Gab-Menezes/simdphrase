@@ -6,8 +6,7 @@ use rkyv::vec::ArchivedVec;
 use roaring::RoaringBitmap;
 
 use crate::{
-    db::DB,
-    utils::{normalize, tokenize},
+    db::DB, roaringish::RoaringishPacked, utils::{normalize, tokenize}
 };
 
 pub trait KeywordSearch {
@@ -28,17 +27,20 @@ impl KeywordSearch for DB {
             return self.single_token_search(&rotxn, &tokens);
         }
 
-        let final_tokens = self.merge_tokens(&tokens);
+        // TODO: Fix
+        // let final_tokens = self.merge_tokens(&tokens);
 
-        if final_tokens.len() == 1 {
-            return self.single_token_search(&rotxn, &final_tokens);
-        }
+        // if final_tokens.len() == 1 {
+        //     return self.single_token_search(&rotxn, &final_tokens);
+        // }
 
-        let query_len = tokens.len();
+        // let query_len = tokens.len();
 
-        let deduped_tokens: AHashSet<_> = final_tokens.iter().collect();
+        let final_tokens = tokens;
+
+        let deduped_tokens: AHashSet<_> = final_tokens.iter().copied().collect();
         let mut token_to_token_id = AHashMap::with_capacity(deduped_tokens.len());
-        let mut token_id_to_posting_list = FxHashMap::with_capacity(deduped_tokens.len());
+        let mut token_id_to_packed = FxHashMap::with_capacity(deduped_tokens.len());
         for token in deduped_tokens.iter() {
             let Some(token_id) = self.get_token_id(&rotxn, token) else {
                 return Vec::new();
@@ -46,27 +48,29 @@ impl KeywordSearch for DB {
 
             let pl = self.get_posting_list(&rotxn, token_id);
 
-            token_to_token_id.insert(token.as_str(), token_id);
-            token_id_to_posting_list.insert(token_id, pl);
+            // token_to_token_id.insert(token.as_str(), token_id);
+            token_to_token_id.insert(*token, token_id);
+            token_id_to_packed.insert(token_id, RoaringishPacked::from(pl));
         }
 
-        let mut its = Vec::with_capacity(final_tokens.len());
-        let mut positionss = Vec::with_capacity(final_tokens.len());
-        for t in final_tokens.iter() {
-            let token_id = token_to_token_id.get(t.as_str()).unwrap();
-            let pl = token_id_to_posting_list.get(token_id).unwrap();
 
-            its.push(pl.doc_ids.iter().peekable());
-            positionss.push(&pl.positions);
+        let mut it = final_tokens.iter();
+
+        let lhs = it.next().unwrap();
+        let lhs = token_to_token_id.get(lhs).unwrap();
+        let lhs = token_id_to_packed.get(lhs).unwrap();
+
+        let rhs = it.next().unwrap();
+        let rhs = token_to_token_id.get(rhs).unwrap();
+        let rhs = token_id_to_packed.get(rhs).unwrap();
+
+        let mut lhs = lhs.intersect(rhs);
+        for t in it {
+            let rhs = token_to_token_id.get(t).unwrap();
+            let rhs = token_id_to_packed.get(rhs).unwrap();
+            lhs = lhs.intersect(rhs);
         }
-
-        unsafe { 
-            std::hint::assert_unchecked(its.len() == positionss.len());
-            std::hint::assert_unchecked(its.len() >= 1);
-        };
-    
-
-        intersect(query_len, its, positionss)
+        lhs.get_doc_ids()
     }
 }
 

@@ -13,7 +13,7 @@ use rkyv::vec::ArchivedVec;
 use roaring::RoaringBitmap;
 
 use crate::{
-    codecs::{NativeU32, ZeroCopyCodec}, document::Document, indexer::Indexer, pl::{ArchivedPostingList, PostingList}, utils::MAX_SEQ_LEN
+    codecs::{NativeU32, ZeroCopyCodec}, document::Document, indexer::Indexer, pl::{ArchivedPostingList, PostingList}, utils::MAX_SEQ_LEN, Roaringish
 };
 
 #[derive(Debug)]
@@ -236,7 +236,7 @@ impl DB {
 
             for (doc_id, pos) in doc_ids_and_pos {
                 doc_ids.push(doc_id);
-                positions.push(pos);
+                positions.push(Roaringish::from_positions_sorted(pos));
             }
 
             let pl = PostingList::new(doc_ids, positions);

@@ -1,12 +1,11 @@
 #![feature(new_uninit)]
 
 use clap::{Args, Parser, Subcommand};
-use phrase_search::{KeywordSearch, DB};
+use phrase_search::{KeywordSearch, Roaringish, DB};
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
     slice::ParallelSlice,
 };
-use rkyv::{ser::{serializers::{AlignedSerializer, AllocScratch, AllocSerializer, CompositeSerializer, FallbackScratch, HeapScratch, ScratchTracker, SharedSerializeMap}, Serializer}, AlignedVec};
 use std::{path::PathBuf, process::{Command, Stdio}, sync::{atomic::{AtomicU32, Ordering::Relaxed}}};
 
 use ahash::{AHashSet};
@@ -20,6 +19,7 @@ struct CommandArgs {
 #[derive(Subcommand, Debug)]
 enum Ty {
     IndexFolder(IndexFolder),
+    IndexText(IndexFolder),
     Search(Search),
 }
 
@@ -142,6 +142,28 @@ fn search(args: Search) {
     }
 }
 
+fn index_text(args: IndexFolder) {
+    println!("Start Indexing");
+
+    let files: Vec<_> = std::fs::read_dir(&args.folder)
+        .unwrap()
+        .map(|file| file.unwrap().path())
+        .collect();
+
+    println!();
+    println!("Files to Index: {files:#?}");
+    println!();
+
+    let b = std::time::Instant::now();
+    let next_doc_id = AtomicU32::new(0);
+
+    let db = DB::truncate(&args.index_name, 0, args.db_size);
+    let indexer = db.indexer(&next_doc_id);
+    indexer.index(&files);
+
+    println!("Whole Indexing took {:?}", b.elapsed());
+}
+
 fn main() {
     let args = CommandArgs::parse();
 
@@ -150,6 +172,7 @@ fn main() {
 
     match args.ty {
         Ty::IndexFolder(arg) => index_folder(arg),
+        Ty::IndexText(arg) => index_text(arg),
         Ty::Search(arg) => search(arg),
     }
 }

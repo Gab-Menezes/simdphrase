@@ -4,7 +4,7 @@ use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use roaring::RoaringBitmap;
 
-use crate::{db::DB, document::Document, utils::{normalize, tokenize, MAX_SEQ_LEN}};
+use crate::{db::DB, document::Document, roaringish::MAX_VALUE, utils::{normalize, tokenize, MAX_SEQ_LEN}};
 
 #[derive(Debug)]
 pub struct Indexer<'a, 'b> {
@@ -68,7 +68,7 @@ impl<'a, 'b> Indexer<'a, 'b> {
 
     fn index_doc(&mut self, content: &str, current_doc_id: u32, token_id_repr: &mut Vec<u32>) {
         let content = normalize(content);
-        for (pos, token) in tokenize(&content).enumerate() {
+        for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
             let Some(token_id) = self.get_token_id(token) else {
                 continue;
             };
@@ -114,7 +114,7 @@ impl<'a, 'b> Indexer<'a, 'b> {
     }
 
     fn generate_common_tokens(&mut self, token_id_reprs: Vec<Vec<u32>>) -> FxHashSet<u32> {
-        let max = (self.token_id_to_freq.len() as f64 * 0.00002f64) as usize;
+        let max = (self.token_id_to_freq.len() as f64 * 0.0008f64) as usize;
         self.token_id_to_freq
             .sort_unstable_by_key(|(_, freq)| Reverse(*freq));
         let common_token_ids: FxHashSet<_> = self.token_id_to_freq[0..max]
@@ -158,28 +158,24 @@ impl<'a, 'b> Indexer<'a, 'b> {
         let mut last_doc_id = 0;
         let mut docs_in_shard = 0;
         for file in files.iter() {
-            let docs = std::fs::read_to_string(file).unwrap();
-            for str_doc in docs.lines() {
-                docs_in_shard += 1;
-                let document: Document = serde_json::from_str(str_doc).unwrap();
+            let text = std::fs::read_to_string(file).unwrap();
 
-                let doc_id = self.next_doc_id.fetch_add(1, Ordering::Relaxed);
-                last_doc_id = doc_id;
-        
-                self.doc_ids.push(doc_id);
-                self.documents.push(document);
-                token_id_reprs.push(Vec::new());
-                let token_id_repr = token_id_reprs.last_mut().unwrap();
+            docs_in_shard += 1;
+            let doc_id = self.next_doc_id.fetch_add(1, Ordering::Relaxed);
+            last_doc_id = doc_id;
 
-                let Some(content) = self.documents.last().unwrap().content.clone() else {
-                    continue;
-                };
+            self.doc_ids.push(doc_id);
+            self.documents.push(file.to_str().unwrap().to_owned());
 
-                self.index_doc(&content, doc_id, token_id_repr);
-            }
+            token_id_reprs.push(Vec::new());
+            let token_id_repr = token_id_reprs.last_mut().unwrap();
+
+            self.index_doc(&text, doc_id, token_id_repr);
         }
 
-        let common_token_ids = self.generate_common_tokens(token_id_reprs);
+        // TODO: Fix
+        let common_token_ids = FxHashSet::new();
+        // let common_token_ids = self.generate_common_tokens(token_id_reprs);
         self.flush(common_token_ids, files, docs_in_shard, last_doc_id);
         (docs_in_shard, last_doc_id)
     }
