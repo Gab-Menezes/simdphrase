@@ -185,29 +185,25 @@ fn index_msmarco(args: IndexFile) {
     println!("Start Indexing");
 
     let reader = BufReader::new(File::open(args.file).unwrap());
-    let docs: Vec<_> = reader
+    let it = reader
         .lines()
         .enumerate()
         .map(|(i, line)| {
             let line = line.unwrap();
             let mut it = line.split("\t");
             it.next().unwrap();
+            it.next().unwrap();
             (it.next().unwrap().to_owned(), i as u32)
-        })
-        .collect();
-
-    println!();
-    println!("{} documents", docs.len());
-    println!();
+        });
 
     let b = std::time::Instant::now();
     let next_doc_id = AtomicU32::new(0);
 
     let db = DB::truncate(&args.index_name, args.db_size);
     let indexer = db.indexer(&next_doc_id);
-    indexer.index(docs);
+    let num_docs = indexer.index(it);
 
-    println!("Whole Indexing took {:?}", b.elapsed());
+    println!("Whole Indexing took {:?} (total number of documents: {num_docs})", b.elapsed());
 }
 
 fn main() {

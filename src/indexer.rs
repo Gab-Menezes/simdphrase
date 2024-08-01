@@ -154,14 +154,13 @@ impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
         return common_token_ids;
     }
 
-    pub fn index(mut self, docs: Vec<(String, D)>) -> (u32, u32) {
+    pub fn index<S: AsRef<str>, I: IntoIterator<Item = (S, D)>>(mut self, docs: I) -> u32 {
         let mut token_id_reprs = Vec::new();
-        let mut last_doc_id = 0;
-        let mut docs_in_shard = 0;
+        let mut num_docs = 0;
         for (content, doc) in docs {
-            docs_in_shard += 1;
+            let content = content.as_ref();
+            num_docs += 1;
             let doc_id = self.next_doc_id.fetch_add(1, Ordering::Relaxed);
-            last_doc_id = doc_id;
 
             self.doc_ids.push(doc_id);
             self.documents.push(doc);
@@ -169,14 +168,20 @@ impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
             token_id_reprs.push(Vec::new());
             let token_id_repr = token_id_reprs.last_mut().unwrap();
 
-            self.index_doc(&content, doc_id, token_id_repr);
+            self.index_doc(content, doc_id, token_id_repr);
+
+            if num_docs % 100000 == 0 {
+                println!("Indexed: {num_docs}");
+            }
         }
 
         // TODO: Fix
         let common_token_ids = FxHashSet::new();
         // let common_token_ids = self.generate_common_tokens(token_id_reprs);
+
         self.flush(common_token_ids);
-        (docs_in_shard, last_doc_id)
+
+        num_docs
     }
 
     fn flush(self, common_token_ids: FxHashSet<u32>) {
