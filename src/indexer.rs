@@ -1,11 +1,21 @@
-use std::{cmp::Reverse, path::PathBuf, sync::atomic::{AtomicU32, Ordering}};
+use std::{
+    cmp::Reverse, collections::HashMap, ops::{Deref, DerefMut}, path::PathBuf, sync::atomic::{AtomicU32, Ordering}
+};
 
 use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use rkyv::{ser::serializers::AllocSerializer, Serialize};
 use roaring::RoaringBitmap;
 
-use crate::{db::DB, document::Document, roaringish::MAX_VALUE, utils::{normalize, tokenize, MAX_SEQ_LEN}};
+use crate::{
+    db::DB,
+    document::Document,
+    pl::PostingList,
+    roaringish::MAX_VALUE,
+    utils::{normalize, tokenize, MAX_SEQ_LEN},
+    Roaringish,
+};
+
 
 #[derive(Debug)]
 pub struct Indexer<'a, 'b, D: Serialize<AllocSerializer<256>>> {
@@ -13,8 +23,9 @@ pub struct Indexer<'a, 'b, D: Serialize<AllocSerializer<256>>> {
 
     next_token_id: u32,
     token_to_token_id: AHashMap<Box<str>, u32>,
+
     token_id_to_freq: Vec<(u32, u32)>,
-    token_id_doc_id_to_positions: FxHashMap<(u32, u32), Vec<u32>>,
+    token_id_pl: FxHashMap<u32, PostingList>,
 
     token_id_to_token: Vec<Box<str>>,
 
@@ -34,7 +45,7 @@ impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
             next_token_id: 0,
             doc_ids: Vec::new(),
             documents: Vec::new(),
-            token_id_doc_id_to_positions: FxHashMap::new(),
+            token_id_pl: FxHashMap::new(),
             token_id_to_token: Vec::new(),
             db,
         }
@@ -67,52 +78,59 @@ impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
         Some(*token_id)
     }
 
-    fn index_doc(&mut self, content: &str, current_doc_id: u32, token_id_repr: &mut Vec<u32>) {
+    fn index_doc(&mut self, content: &str, doc_id: u32, token_id_repr: &mut Vec<u32>) {
+        let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
             let Some(token_id) = self.get_token_id(token) else {
                 continue;
             };
 
-            self.token_id_doc_id_to_positions
-                .entry((token_id, current_doc_id))
+            token_id_to_positions
+                .entry(token_id)
                 .or_default()
                 .push(pos as u32);
-
             token_id_repr.push(token_id);
         }
-    }
 
-    fn analyze_common_tokens_sequence(
-        &mut self,
-        doc_id: u32,
-        begin_pos: usize,
-        sequence: &mut Vec<u32>,
-    ) {
-        if sequence.len() <= 1 {
-            return;
-        }
-
-        for i in 0..(sequence.len() - 1) {
-            let b = i + 2;
-            let e = (sequence.len() + 1).min(i + MAX_SEQ_LEN + 1);
-            for j in b..e {
-                let token: String = sequence[i..j]
-                    .iter()
-                    .map(|token_id| self.token_id_to_token[*token_id as usize].as_ref())
-                    .intersperse(" ")
-                    .collect();
-                let Some(token_id) = self.get_token_id(&token) else {
-                    break;
-                };
-
-                self.token_id_doc_id_to_positions
-                    .entry((token_id, doc_id))
-                    .or_default()
-                    .push((begin_pos + i) as u32);
-            }
+        for (token_id, positions) in token_id_to_positions {
+            self.token_id_pl
+                .entry(token_id)
+                .or_default()
+                .push_unchecked(doc_id, Roaringish::from_positions_sorted(positions));
         }
     }
+
+    // fn analyze_common_tokens_sequence(
+    //     &mut self,
+    //     doc_id: u32,
+    //     begin_pos: usize,
+    //     sequence: &mut Vec<u32>,
+    // ) {
+    //     if sequence.len() <= 1 {
+    //         return;
+    //     }
+
+    //     for i in 0..(sequence.len() - 1) {
+    //         let b = i + 2;
+    //         let e = (sequence.len() + 1).min(i + MAX_SEQ_LEN + 1);
+    //         for j in b..e {
+    //             let token: String = sequence[i..j]
+    //                 .iter()
+    //                 .map(|token_id| self.token_id_to_token[*token_id as usize].as_ref())
+    //                 .intersperse(" ")
+    //                 .collect();
+    //             let Some(token_id) = self.get_token_id(&token) else {
+    //                 break;
+    //             };
+
+    //             self.token_id_doc_id_to_positions
+    //                 .entry((token_id, doc_id))
+    //                 .or_default()
+    //                 .push((begin_pos + i) as u32);
+    //         }
+    //     }
+    // }
 
     fn generate_common_tokens(&mut self, token_id_reprs: Vec<Vec<u32>>) -> FxHashSet<u32> {
         let max = (self.token_id_to_freq.len() as f64 * 0.0008f64) as usize;
@@ -142,13 +160,13 @@ impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
                     continue;
                 }
 
-                self.analyze_common_tokens_sequence(doc_id, begin_pos, &mut sequence);
+                // self.analyze_common_tokens_sequence(doc_id, begin_pos, &mut sequence);
 
                 sequence.clear();
                 begin_pos = pos + 1;
             }
 
-            self.analyze_common_tokens_sequence(doc_id, begin_pos, &mut sequence);
+            // self.analyze_common_tokens_sequence(doc_id, begin_pos, &mut sequence);
         }
 
         return common_token_ids;
@@ -169,10 +187,6 @@ impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
             let token_id_repr = token_id_reprs.last_mut().unwrap();
 
             self.index_doc(content, doc_id, token_id_repr);
-
-            if num_docs % 100000 == 0 {
-                println!("Indexed: {num_docs}");
-            }
         }
 
         // TODO: Fix
@@ -192,8 +206,7 @@ impl<'a, 'b, D: Serialize<AllocSerializer<256>> + 'static> Indexer<'a, 'b, D> {
 
         self.db.write_postings_list(
             &mut rwtxn,
-            self.token_id_doc_id_to_positions,
-            self.token_id_to_token.len(),
+            self.token_id_pl,
         );
 
         self.db

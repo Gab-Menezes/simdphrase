@@ -205,31 +205,12 @@ impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
     pub(crate) fn write_postings_list(
         &self,
         rwtxn: &mut RwTxn,
-        token_id_doc_id_to_positions: FxHashMap<(u32, u32), Vec<u32>>,
-        number_of_tokens: usize,
+        token_id_to_pl: FxHashMap<u32, PostingList>,
     ) {
-        let mut token_id_to_doc_ids_and_pos = vec![Vec::new(); number_of_tokens];
-        for ((token_id, doc_id), pos) in token_id_doc_id_to_positions {
-            token_id_to_doc_ids_and_pos[token_id as usize].push((doc_id, pos))
-        }
+        let mut token_id_to_pl: Vec<_> = token_id_to_pl.into_iter().collect();
+        token_id_to_pl.sort_unstable_by_key(|(token_id, _)| *token_id);
 
-        token_id_to_doc_ids_and_pos
-            .iter_mut()
-            .for_each(|doc_ids_and_pos| {
-                doc_ids_and_pos.sort_unstable_by_key(|(doc_id, _)| *doc_id)
-            });
-
-        for (token_id, doc_ids_and_pos) in token_id_to_doc_ids_and_pos.into_iter().enumerate() {
-            let token_id = token_id as u32;
-            let mut doc_ids = Vec::new();
-            let mut positions = Vec::new();
-
-            for (doc_id, pos) in doc_ids_and_pos {
-                doc_ids.push(doc_id);
-                positions.push(Roaringish::from_positions_sorted(pos));
-            }
-
-            let pl = PostingList::new(doc_ids, positions);
+        for (token_id, pl) in token_id_to_pl {
             self.db_token_id_to_posting_list
                 .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &pl)
                 .unwrap();

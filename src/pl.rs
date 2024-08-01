@@ -19,4 +19,10 @@ impl PostingList {
 
         Self { doc_ids, positions, len_sum }
     }
+
+    pub fn push_unchecked(&mut self, doc_id: u32, positions: Roaringish) {
+        self.len_sum += positions.inner.len() as u64;
+        self.doc_ids.push(doc_id);
+        self.positions.push(positions);
+    }
 }
