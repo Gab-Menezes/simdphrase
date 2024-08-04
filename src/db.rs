@@ -56,7 +56,7 @@ impl Debug for Stats {
         let sum = 
             self.normalize_tokenize.load(Relaxed) +
             self.merge.load(Relaxed) +
-            self.get_pls.load(Relaxed) +
+            // self.get_pls.load(Relaxed) +
             self.first_gallop.load(Relaxed) +
             self.add_one_group.load(Relaxed) +
             self.second_gallop.load(Relaxed) +
@@ -69,7 +69,7 @@ impl Debug for Stats {
 
             let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64;
             let merge = self.merge.load(Relaxed) as f64 / sum as f64;
-            let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
+            // let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
             let first_gallop = self.first_gallop.load(Relaxed) as f64 / sum as f64;
             let add_one_group = self.add_one_group.load(Relaxed) as f64 / sum as f64;
             let second_gallop = self.second_gallop.load(Relaxed) as f64 / sum as f64;
@@ -82,7 +82,7 @@ impl Debug for Stats {
         f.debug_struct("Stats")
             .field("normalize_tokenize", &normalize_tokenize)
             .field("merge", &merge)
-            .field("get_pls", &get_pls)
+            // .field("get_pls", &get_pls)
             .field("first_gallop", &first_gallop)
             .field("add_one_group", &add_one_group)
             .field("second_gallop", &second_gallop)
