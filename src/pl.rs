@@ -1,6 +1,6 @@
 use rkyv::{Archive, Deserialize, Serialize};
 
-use crate::Roaringish;
+use crate::roaringish::Roaringish;
 
 #[derive(Debug, Default, Serialize, Deserialize, Archive)]
 #[archive_attr(derive(Debug))]

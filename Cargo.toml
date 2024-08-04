@@ -17,10 +17,16 @@ ahash = "0.8.11"
 rayon = "1.10.0"
 bincode = "1.3.3"
 clap = { version = "4.5.9", features = ["derive"] }
-rkyv = "0.7.44"
+rkyv = { git = "https://github.com/rkyv/rkyv.git", features = ["unaligned"] }
+# rkyv = "0.7.44"
 # parquet = "52.1.0"
 # arrow = "52.1.0"
 # rkyv = { git = "https://github.com/rkyv/rkyv", rev="1a7ce42", features = ["unaligned"] }
+
+[patch.crates-io]
+rkyv = { git = "https://github.com/rkyv/rkyv.git", features = ["unaligned"] }
+bytecheck = { git = "https://github.com/rkyv/bytecheck.git" }
+rancor = { git = "https://github.com/rkyv/rancor.git" }
 
 [dev-dependencies]
 criterion = "0.5.1"

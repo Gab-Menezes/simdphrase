@@ -1,16 +1,18 @@
 use std::{
     cell::UnsafeCell,
     cmp::Reverse,
+    collections::BTreeSet,
+    fmt::{Debug, Display},
     fs::{DirEntry, OpenOptions},
     io::{Error, Write},
     iter::{Peekable, Zip},
     path::{Path, PathBuf},
     slice::Iter,
     str::FromStr,
-    sync::atomic::AtomicU32,
+    sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
 };
 
-use ahash::{AHashMap, AHashSet};
+use ahash::{AHashMap, AHashSet, HashMapExt};
 use fxhash::{FxHashMap, FxHashSet};
 use heed::{
     byteorder::{BigEndian, LittleEndian},
@@ -18,19 +20,109 @@ use heed::{
     Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
 };
 use rkyv::{
-    ser::serializers::AllocSerializer, vec::ArchivedVec, Archive, Deserialize, Infallible,
-    Serialize,
+    ser::DefaultSerializer, util::AlignedVec, vec::ArchivedVec, Archive, Deserialize, Serialize,
 };
 use roaring::RoaringBitmap;
 
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
-    document::Document,
-    indexer::Indexer,
+    normalize,
     pl::{ArchivedPostingList, PostingList},
+    roaringish::RoaringishPacked,
+    tokenize,
     utils::MAX_SEQ_LEN,
-    Roaringish,
 };
+
+#[derive(Default)]
+pub struct Stats {
+    pub normalize_tokenize: AtomicU64,
+    pub merge: AtomicU64,
+    pub get_pls: AtomicU64,
+    pub first_gallop: AtomicU64,
+    pub add_one_group: AtomicU64,
+    pub second_gallop: AtomicU64,
+    pub first_intersect: AtomicU64,
+    pub second_intersect: AtomicU64,
+    pub first_result: AtomicU64,
+    pub second_result: AtomicU64,
+    pub add_lhs: AtomicU64,
+    pub add_rhs: AtomicU64,
+}
+
+impl Debug for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    
+
+        let sum = 
+            self.normalize_tokenize.load(Relaxed) +
+            self.merge.load(Relaxed) +
+            self.get_pls.load(Relaxed) +
+            self.first_gallop.load(Relaxed) +
+            self.add_one_group.load(Relaxed) +
+            self.second_gallop.load(Relaxed) +
+            self.first_intersect.load(Relaxed) +
+            self.second_intersect.load(Relaxed) +
+            self.first_result.load(Relaxed) +
+            self.second_result.load(Relaxed) +
+            self.add_lhs.load(Relaxed) +
+            self.add_rhs.load(Relaxed);
+
+            let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64;
+            let merge = self.merge.load(Relaxed) as f64 / sum as f64;
+            let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
+            let first_gallop = self.first_gallop.load(Relaxed) as f64 / sum as f64;
+            let add_one_group = self.add_one_group.load(Relaxed) as f64 / sum as f64;
+            let second_gallop = self.second_gallop.load(Relaxed) as f64 / sum as f64;
+            let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64;
+            let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64;
+            let first_result = self.first_result.load(Relaxed) as f64 / sum as f64;
+            let second_result = self.second_result.load(Relaxed) as f64 / sum as f64;
+            let add_lhs = self.add_lhs.load(Relaxed) as f64 / sum as f64;
+            let add_rhs = self.add_rhs.load(Relaxed) as f64 / sum as f64;
+        f.debug_struct("Stats")
+            .field("normalize_tokenize", &normalize_tokenize)
+            .field("merge", &merge)
+            .field("get_pls", &get_pls)
+            .field("first_gallop", &first_gallop)
+            .field("add_one_group", &add_one_group)
+            .field("second_gallop", &second_gallop)
+            .field("first_intersect", &first_intersect)
+            .field("second_intersect", &second_intersect)
+            .field("first_result", &first_result)
+            .field("second_result", &second_result)
+            .field("add_lhs", &add_lhs)
+            .field("add_rhs", &add_rhs)
+            .finish()
+    }
+    // fn fmt(&self, f: &mut $crate::fmt::Formatter) -> $crate::fmt::Result {
+    //     match self {
+    //         Stats {
+    //             normalize_tokenize: normalize_tokenize,
+    //             merge: merge,
+    //             get_pls: get_pls,
+    //             first_gallop: first_gallop,
+    //             add_one_group: add_one_group,
+    //             second_gallop: second_gallop,
+    //             first_intersect: first_intersect,
+    //             second_intersect: second_intersect,
+    //             first_result: first_result,
+    //             second_result: second_result,
+    //         } => f
+    //             .debug_struct("Stats")
+    //             .field("normalize_tokenize", &normalize_tokenize)
+    //             .field("merge", &merge)
+    //             .field("get_pls", &get_pls)
+    //             .field("first_gallop", &first_gallop)
+    //             .field("add_one_group", &add_one_group)
+    //             .field("second_gallop", &second_gallop)
+    //             .field("first_intersect", &first_intersect)
+    //             .field("second_intersect", &second_intersect)
+    //             .field("first_result", &first_result)
+    //             .field("second_result", &second_result)
+    //             .finish(),
+    //     }
+    // }
+}
 
 #[derive(Debug)]
 pub struct ShardsInfo {
@@ -41,19 +133,36 @@ pub struct ShardsInfo {
     pub next_doc_id: u32,
 }
 
-#[derive(Debug)]
-pub struct DB<D: Serialize<AllocSerializer<256>>> {
+pub struct DB<D>
+where
+    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive,
+{
     pub(crate) env: Env,
-    db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D, 256>>,
+    db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
 
     db_token_to_token_id: Database<Str, NativeU32>,
-    db_token_id_to_posting_list: Database<NativeU32, ZeroCopyCodec<PostingList, 256>>,
+    db_token_id_to_posting_list: Database<NativeU32, ZeroCopyCodec<PostingList>>,
     db_common_token_id_to_token: Database<NativeU32, Str>,
 
     common_tokens: AHashSet<Box<str>>,
 }
 
-impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
+unsafe impl<D> Send for DB<D> where
+    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive + Send
+{
+}
+
+unsafe impl<D> Sync for DB<D> where
+    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive + Sync
+{
+}
+
+impl<D> DB<D>
+where
+    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>>
+        + Archive
+        + 'static,
+{
     pub fn truncate(path: &Path, db_size: usize) -> Self {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
@@ -71,7 +180,7 @@ impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
 
         let db_doc_id_to_document = env
             .database_options()
-            .types::<NativeU32, ZeroCopyCodec<D, 256>>()
+            .types::<NativeU32, ZeroCopyCodec<D>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("doc_id_to_document")
             .create(&mut wrtxn)
@@ -83,7 +192,7 @@ impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
 
         let db_token_id_to_posting_list = env
             .database_options()
-            .types::<NativeU32, ZeroCopyCodec<PostingList, 256>>()
+            .types::<NativeU32, ZeroCopyCodec<PostingList>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("token_id_to_posting_list")
             .create(&mut wrtxn)
@@ -109,79 +218,17 @@ impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
         }
     }
 
-    pub fn indexer<'a, 'b>(&'b self, next_doc_id: &'a AtomicU32) -> Indexer<'a, 'b, D> {
-        Indexer::new(next_doc_id, self)
-    }
-
-    pub fn get_shards_info(path: &Path) -> ShardsInfo {
-        let mut indexed_files = AHashSet::new();
-        let mut shards_ok = AHashMap::new();
-        let mut shards_with_error = AHashSet::new();
-        let mut next_shard_id = 0;
-        let mut next_doc_id = 0;
-
-        let Ok(dir) = std::fs::read_dir(path) else {
-            return ShardsInfo {
-                indexed_files,
-                next_doc_id,
-                next_shard_id,
-                shards_with_error,
-                shards_ok,
-            };
-        };
-
-        let mut f = |shard_path: &Path| -> Option<(u32, u32)> {
-            let shard_id = shard_path
-                .file_name()?
-                .to_str()?
-                .strip_prefix("shard_")?
-                .parse()
-                .ok()?;
-            next_shard_id = next_shard_id.max(shard_id);
-
-            let file_name = shard_path.join("indexed_files.txt");
-            let content = std::fs::read_to_string(&file_name).ok()?;
-            let mut lines = content.lines();
-            let docs_in_shard = lines.next()?.parse().ok()?;
-            let last_doc_id = lines.next()?;
-
-            next_doc_id = next_doc_id.max(last_doc_id.parse().ok()?);
-
-            for l in lines {
-                indexed_files.insert(PathBuf::from_str(l).ok()?);
-            }
-
-            Some((shard_id, docs_in_shard))
-        };
-
-        for shard_path in dir {
-            let shard_path = shard_path.unwrap().path();
-            match f(&shard_path) {
-                Some((shard_id, docs_in_shard)) => {
-                    shards_ok.insert(shard_id, docs_in_shard);
-                }
-                None => {
-                    shards_with_error.insert(shard_path);
-                }
-            };
-        }
-
-        ShardsInfo {
-            indexed_files,
-            next_doc_id: next_doc_id + 1,
-            next_shard_id: next_shard_id + 1,
-            shards_with_error,
-            shards_ok,
-        }
-    }
+    // pub fn indexer<'a>(&'a self, docs_per_shard: Option<u32>) -> Indexer<'a, D> {
+    //     Indexer::new(self, docs_per_shard)
+    // }
 
     pub(crate) fn write_doc_id_to_document(
         &self,
         rwtxn: &mut RwTxn,
-        doc_ids: Vec<u32>,
-        documents: Vec<D>,
+        doc_ids: &[u32],
+        documents: &[D],
     ) {
-        for (doc_id, document) in doc_ids.into_iter().zip(documents.into_iter()) {
+        for (doc_id, document) in doc_ids.iter().zip(documents.iter()) {
             self.db_doc_id_to_document
                 .put_with_flags(rwtxn, PutFlags::APPEND, &doc_id, &document)
                 .unwrap();
@@ -191,26 +238,20 @@ impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
     pub(crate) fn write_token_to_token_id(
         &self,
         rwtxn: &mut RwTxn,
-        token_to_token_id: AHashMap<Box<str>, u32>,
+        token_to_token_id: &AHashMap<Box<str>, u32>,
     ) {
-        let mut token_to_token_id: Vec<_> = token_to_token_id.into_iter().collect();
+        let mut token_to_token_id: Vec<_> = token_to_token_id.iter().collect();
         token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
-        for (token, token_id) in token_to_token_id {
+        for (token, token_id) in token_to_token_id.iter() {
             self.db_token_to_token_id
                 .put_with_flags(rwtxn, PutFlags::APPEND, &token, &token_id)
                 .unwrap();
         }
     }
 
-    pub(crate) fn write_postings_list(
-        &self,
-        rwtxn: &mut RwTxn,
-        token_id_to_pl: FxHashMap<u32, PostingList>,
-    ) {
-        let mut token_id_to_pl: Vec<_> = token_id_to_pl.into_iter().collect();
-        token_id_to_pl.sort_unstable_by_key(|(token_id, _)| *token_id);
-
-        for (token_id, pl) in token_id_to_pl {
+    pub(crate) fn write_postings_list(&self, rwtxn: &mut RwTxn, token_id_to_pl: &[PostingList]) {
+        for (token_id, pl) in token_id_to_pl.iter().enumerate() {
+            let token_id = token_id as u32;
             self.db_token_id_to_posting_list
                 .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &pl)
                 .unwrap();
@@ -220,16 +261,16 @@ impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
     pub(crate) fn write_common_token_ids(
         &self,
         rwtxn: &mut RwTxn,
-        common_token_ids: FxHashSet<u32>,
+        common_token_ids: &FxHashSet<u32>,
         token_id_to_token: &[Box<str>],
     ) {
         let mut token_id_to_token: Vec<_> = common_token_ids
-            .into_iter()
-            .map(|token_id| (token_id, token_id_to_token[token_id as usize].as_ref()))
+            .iter()
+            .map(|token_id| (token_id, token_id_to_token[*token_id as usize].as_ref()))
             .collect();
         token_id_to_token.sort_unstable_by_key(|(token_id, _)| *token_id);
 
-        for (token_id, token) in token_id_to_token {
+        for (token_id, token) in token_id_to_token.iter() {
             self.db_common_token_id_to_token
                 .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, token)
                 .unwrap();
@@ -239,8 +280,9 @@ impl<D: Serialize<AllocSerializer<256>> + 'static> DB<D> {
 
 impl<D> DB<D>
 where
-    D: Serialize<AllocSerializer<256>> + 'static,
-    D::Archived: Deserialize<D, Infallible>,
+    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>>
+        + Archive
+        + 'static,
 {
     pub fn open(path: &Path, db_size: usize) -> Self {
         let env = unsafe {
@@ -256,7 +298,7 @@ where
 
         let db_doc_id_to_document = env
             .database_options()
-            .types::<NativeU32, ZeroCopyCodec<D, 256>>()
+            .types::<NativeU32, ZeroCopyCodec<D>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("doc_id_to_document")
             .open(&rotxn)
@@ -270,7 +312,7 @@ where
 
         let db_token_id_to_posting_list = env
             .database_options()
-            .types::<NativeU32, ZeroCopyCodec<PostingList, 256>>()
+            .types::<NativeU32, ZeroCopyCodec<PostingList>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name("token_id_to_posting_list")
             .open(&rotxn)
@@ -287,10 +329,11 @@ where
             .unwrap();
 
         let common_tokens = Self::read_common_tokens(&rotxn, db_common_token_id_to_token);
-
+        // let common_tokens = AHashSet::new();
+        let sorted: BTreeSet<_> = common_tokens.iter().collect();
         rotxn.commit().unwrap();
 
-        println!("Common tokens: {common_tokens:?}");
+        println!("Common tokens ({}): {sorted:?}", sorted.len());
 
         Self {
             env,
@@ -314,7 +357,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn merge_tokens(&self, tokens: &[&str]) -> Vec<String> {
+    pub(crate) fn merge_tokens(&self, tokens: &[&str]) -> Vec<(String, u32)> {
         let mut final_tokens = Vec::with_capacity(tokens.len());
         let mut sequence = Vec::with_capacity(tokens.len());
         for token in tokens.iter() {
@@ -324,63 +367,73 @@ where
             }
 
             if sequence.len() <= 1 {
-                final_tokens.extend(sequence.iter().map(|t| t.to_string()));
-                final_tokens.push(token.to_string());
+                final_tokens.extend(sequence.iter().map(|t| (t.to_string(), 1)));
+                final_tokens.push((token.to_string(), 1));
                 sequence.clear();
                 continue;
             }
 
             for chunk in sequence.chunks(MAX_SEQ_LEN) {
                 let token: String = chunk.into_iter().map(|t| *t).intersperse(" ").collect();
-                final_tokens.push(token);
+                final_tokens.push((token, chunk.len() as u32));
             }
 
-            final_tokens.push(token.to_string());
+            final_tokens.push((token.to_string(), 1));
             sequence.clear();
         }
 
         if sequence.len() > 1 {
             for chunk in sequence.chunks(MAX_SEQ_LEN) {
                 let token: String = chunk.into_iter().map(|t| *t).intersperse(" ").collect();
-                final_tokens.push(token);
+                final_tokens.push((token, chunk.len() as u32));
             }
         } else {
-            final_tokens.extend(sequence.iter().map(|t| t.to_string()));
+            final_tokens.extend(sequence.iter().map(|t| (t.to_string(), 1)));
         }
 
         final_tokens
     }
 
     #[inline(always)]
-    pub(crate) fn single_token_search<T: AsRef<str>>(
-        &self,
-        rotxn: &RoTxn,
-        tokens: &[T],
-    ) -> Vec<u32> {
-        let token = tokens.first().unwrap().as_ref();
+    pub(crate) fn single_token_search(&self, rotxn: &RoTxn, token: &str) -> Vec<u32> {
         let Some(token_id) = self.db_token_to_token_id.get(&rotxn, token).unwrap() else {
             return Vec::new();
         };
 
         let pl = self.get_posting_list(rotxn, token_id);
 
-        return pl.doc_ids.to_vec();
+        pl.doc_ids.iter().map(|doc_id| doc_id.to_native()).collect()
     }
 
-    pub fn get_documents_by_ids(&self, doc_ids: Vec<u32>) -> Vec<D> {
-        let rdtxn = self.env.read_txn().unwrap();
-        doc_ids
-            .into_iter()
-            .map(|doc_id| {
-                self.db_doc_id_to_document
-                    .get(&rdtxn, &doc_id)
-                    .unwrap()
-                    .unwrap()
-                    .deserialize(&mut rkyv::Infallible)
-                    .unwrap()
-            })
-            .collect()
-    }
+    // pub fn get_documents_by_ids(&self, doc_ids: Vec<u32>)
+    // where
+    //     D: Display,
+    // {
+    //     // pub fn get_documents_by_ids(&self, doc_ids: Vec<u32>) -> Vec<D> {
+    //     let rdtxn = self.env.read_txn().unwrap();
+    //     for doc_id in doc_ids {
+    //         let k = self
+    //             .db_doc_id_to_document
+    //             .get(&rdtxn, &doc_id)
+    //             .unwrap()
+    //             .unwrap()
+    //             .deserialize(&mut rkyv::Infallible)
+    //             .unwrap();
+    //         println!("{k}");
+    //         // panic!()
+    //     }
+    //     // doc_ids
+    //     //     .into_iter()
+    //     //     .map(|doc_id| {
+    //     //         self.db_doc_id_to_document
+    //     //             .get(&rdtxn, &doc_id)
+    //     //             .unwrap()
+    //     //             .unwrap()
+    //     //             .deserialize(&mut rkyv::Infallible)
+    //     //             .unwrap()
+    //     //     })
+    //     //     .collect()
+    // }
 
     pub(crate) fn get_token_id(&self, rotxn: &RoTxn, token: &str) -> Option<u32> {
         unsafe {
@@ -402,5 +455,77 @@ where
                 .unwrap_unchecked()
                 .unwrap_unchecked()
         }
+    }
+
+    pub fn search(&self, q: &str, stats: &Stats) -> Vec<u32> {
+        let b = std::time::Instant::now();
+        let q = normalize(q);
+        let tokens: Vec<_> = tokenize(&q).collect();
+        stats
+            .normalize_tokenize
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+
+        if tokens.len() == 0 {
+            return Vec::new();
+        }
+
+        let rotxn = self.env.read_txn().unwrap();
+        if tokens.len() == 1 {
+            return self.single_token_search(&rotxn, tokens.first().unwrap());
+        }
+
+        let b = std::time::Instant::now();
+        let final_tokens = self.merge_tokens(&tokens);
+        stats
+            .merge
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        if final_tokens.len() == 1 {
+            return self.single_token_search(&rotxn, &final_tokens.first().unwrap().0);
+        }
+
+        let b = std::time::Instant::now();
+        let deduped_tokens: AHashSet<_> = final_tokens.iter().map(|(t, _)| t).collect();
+        let mut token_to_token_id = AHashMap::with_capacity(deduped_tokens.len());
+        let mut token_id_to_packed = FxHashMap::with_capacity(deduped_tokens.len());
+        for token in deduped_tokens.iter() {
+            let Some(token_id) = self.get_token_id(&rotxn, token) else {
+                return Vec::new();
+            };
+
+            let pl = self.get_posting_list(&rotxn, token_id);
+
+            token_to_token_id.insert(*token, token_id);
+            token_id_to_packed.insert(token_id, RoaringishPacked::from(pl));
+        }
+        stats
+            .get_pls
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+
+        let mut it = final_tokens.iter();
+
+        let (lhs, lhs_len) = it.next().unwrap();
+        let lhs = token_to_token_id.get(lhs).unwrap();
+        let lhs = token_id_to_packed.get(lhs).unwrap();
+
+        let (rhs, rhs_len) = it.next().unwrap();
+        let rhs = token_to_token_id.get(rhs).unwrap();
+        let rhs = token_id_to_packed.get(rhs).unwrap();
+        let mut lhs = if *lhs_len > 1 {
+            let b = std::time::Instant::now();
+            let lhs = lhs + (*lhs_len - 1);
+            stats
+            .add_lhs
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+            lhs.intersect(rhs, *rhs_len, stats)
+        } else {
+            lhs.intersect(rhs, *rhs_len, stats)
+        };
+
+        for (t, t_len) in it {
+            let rhs = token_to_token_id.get(t).unwrap();
+            let rhs = token_id_to_packed.get(rhs).unwrap();
+            lhs = lhs.intersect(rhs, *t_len, stats);
+        }
+        lhs.get_doc_ids()
     }
 }

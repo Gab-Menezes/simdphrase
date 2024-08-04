@@ -2,10 +2,10 @@ use rkyv::{Archive, Deserialize, Serialize};
 use std::{
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
-    mem::MaybeUninit,
+    mem::MaybeUninit, ops::Add, sync::atomic::Ordering::Relaxed,
 };
 
-use crate::pl::{ArchivedPostingList, PostingList};
+use crate::{pl::{ArchivedPostingList, PostingList}, Stats};
 
 #[derive(Default, Serialize, Deserialize, Archive)]
 #[archive_attr(derive(Debug))]
@@ -73,6 +73,7 @@ impl Display for Roaringish {
 }
 
 pub const MAX_VALUE: u32 = 16u32 * u16::MAX as u32;
+const ADD_ONE_GROUP: u64 = u16::MAX as u64 + 1;
 
 const fn group(val: u32) -> u32 {
     val / 16
@@ -249,17 +250,13 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
                         i += 1;
                     } else {
-                        let lhs = *lhs_positions.get_unchecked(lhs_i);
+                        doc_id_groups_result
+                        .get_unchecked_mut(i)
+                        .write(doc_id_groups);
 
-                        if lhs & 0x8000 > 1 {
-                            doc_id_groups_result
-                                .get_unchecked_mut(i)
-                                .write(doc_id_groups);
-
-                            let rhs = *rhs_positions.get_unchecked(rhs_i);
-                            rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                            i += 1
-                        }
+                        let rhs = *rhs_positions.get_unchecked(rhs_i);
+                        rhs_positions_result.get_unchecked_mut(i).write(rhs);
+                        i += 1
                     }
 
                     lhs_i += 1;
@@ -327,40 +324,46 @@ impl RoaringishPacked {
         }
     }
 
-    pub fn intersect(&self, rhs: &Self) -> Self {
-        const ADD_ONE_GROUP: u64 = u16::MAX as u64 + 1;
+    pub fn intersect(&self, rhs: &Self, rhs_len: u32, stats: &Stats) -> Self {
         let lhs = BorrowRoaringishPacked::new(self);
         let rhs = BorrowRoaringishPacked::new(rhs);
+        let b = std::time::Instant::now();
         let (doc_id_groups, lhs_positions, rhs_positions) = lhs.gallop_intersect::<true>(&rhs);
+        stats.first_gallop.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_doc_id_groups: Box<_> = self
+        let b = std::time::Instant::now();
+        let (msb_doc_id_groups, msb_positions): (Vec<_>, Vec<_>) = self
             .doc_id_groups
             .iter()
-            .map(|doc_id_group| *doc_id_group + ADD_ONE_GROUP)
+            .zip(self.positions.iter())
+            .filter_map(|(doc_id_group, positions)| (positions & 0x8000 > 1).then(|| (*doc_id_group + ADD_ONE_GROUP, *positions)))
             .collect();
-        let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &self.positions);
+        stats.add_one_group.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &msb_positions);
+        let b = std::time::Instant::now();
         let (msb_doc_id_groups, _, msb_rhs_positions) = msb_packed.gallop_intersect::<false>(&rhs);
-        let msb_lhs_positions = vec![1; msb_doc_id_groups.len()];
+        stats.second_gallop.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         unsafe {
             assume(doc_id_groups.len() == lhs_positions.len());
             assume(doc_id_groups.len() == rhs_positions.len());
 
-            assume(msb_doc_id_groups.len() == msb_lhs_positions.len());
             assume(msb_doc_id_groups.len() == msb_rhs_positions.len());
         };
 
+        let b = std::time::Instant::now();
         let positions_intersect: Box<[u16]> = lhs_positions
             .iter()
             .zip(rhs_positions.iter())
             .map(|(lhs, rhs)| (lhs << 1) & rhs)
             .collect();
+        stats.first_intersect.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_positions_intersect: Box<[u16]> = msb_lhs_positions
-            .iter()
-            .zip(msb_rhs_positions.iter())
-            .map(|(lhs, rhs)| lhs & rhs)
+        let b = std::time::Instant::now();
+        let msb_positions_intersect: Box<[u16]> = msb_rhs_positions.iter()
+            .map(|rhs| 1 & rhs)
             .collect();
+        stats.second_intersect.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         // for (doc_id_group, pos) in doc_id_groups.iter().zip(positions_intersect.iter()) {
         //     println!(
@@ -380,6 +383,7 @@ impl RoaringishPacked {
         //     );
         // }
 
+        let b = std::time::Instant::now();
         let capacity = positions_intersect.len() + msb_positions_intersect.len();
         let mut r_doc_id_groups = Box::new_uninit_slice(capacity);
         let mut r_positions = Box::new_uninit_slice(capacity);
@@ -446,7 +450,9 @@ impl RoaringishPacked {
                 }
             }
         }
+        stats.first_result.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
+        let b = std::time::Instant::now();
         for i in j..msb_positions_intersect.len() {
             unsafe {
                 let msb_doc_id_group = *msb_doc_id_groups.get_unchecked(i);
@@ -460,8 +466,9 @@ impl RoaringishPacked {
                 }
             }
         }
+        stats.second_result.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        unsafe {
+        let packed = unsafe {
             let doc_id_groups =
                 Vec::from_raw_parts(Box::into_raw(r_doc_id_groups) as *mut _, r_i, capacity)
                     .into_boxed_slice();
@@ -471,6 +478,60 @@ impl RoaringishPacked {
             Self {
                 doc_id_groups,
                 positions,
+            }
+        };
+        if rhs_len > 1 {
+            let b = std::time::Instant::now();
+            let r = &packed + (rhs_len - 1);
+            stats
+            .add_rhs
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+            r
+        } else {
+            packed
+        }
+    }
+}
+
+impl Add<u32> for &RoaringishPacked {
+    type Output = RoaringishPacked;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        unsafe {
+            assume(self.doc_id_groups.len() == self.positions.len());
+        }
+
+        let n = self.doc_id_groups.len() * 2;
+        let mut doc_id_groups = Box::new_uninit_slice(n);
+        let mut positions = Box::new_uninit_slice(n);
+        let mut i = 0;
+
+        let mask = u16::MAX << rhs;
+        let bits_to_check = !mask;
+        for (doc_id_group, values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
+            let new_positions = values.rotate_left(rhs as u32);
+            let postions_current_group = new_positions & mask;
+            let postions_new_group = new_positions & bits_to_check;
+            if postions_current_group > 0 {
+                unsafe {
+                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
+                    positions.get_unchecked_mut(i).write(postions_current_group);
+                    i += 1;
+                }
+            }
+            if postions_new_group > 0 {
+                unsafe {
+                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + ADD_ONE_GROUP);
+                    positions.get_unchecked_mut(i).write(postions_new_group);
+                    i += 1;
+                }
+            }
+        }
+
+        unsafe {
+            RoaringishPacked {
+                doc_id_groups: Vec::from_raw_parts(Box::into_raw(doc_id_groups) as *mut _, i, n).into_boxed_slice(),
+                positions: Vec::from_raw_parts(Box::into_raw(positions) as *mut _, i, n).into_boxed_slice()
             }
         }
     }
@@ -517,8 +578,8 @@ impl From<&PostingList> for RoaringishPacked {
 
 impl From<&ArchivedPostingList> for RoaringishPacked {
     fn from(pl: &ArchivedPostingList) -> Self {
-        let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(pl.len_sum as usize);
-        let mut positions: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(pl.len_sum as usize);
+        let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(pl.len_sum.to_native() as usize);
+        let mut positions: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(pl.len_sum.to_native() as usize);
 
         let doc_ids = pl.doc_ids.as_slice();
         let roaringish = pl.positions.as_slice();
@@ -526,7 +587,7 @@ impl From<&ArchivedPostingList> for RoaringishPacked {
 
         let mut b = 0;
         for (doc_id, roaringish) in doc_ids.iter().zip(roaringish.iter()) {
-            let doc_id = make_doc_id(*doc_id);
+            let doc_id = make_doc_id(doc_id.to_native());
 
             let doc_id_groups =
                 unsafe { doc_id_groups.get_unchecked_mut(b..(b + roaringish.inner.len())) };
@@ -538,8 +599,8 @@ impl From<&ArchivedPostingList> for RoaringishPacked {
                 .zip(positions.iter_mut())
                 .zip(roaringish.inner.iter())
             {
-                let group = clear_encoded_positions(*packed) as u64;
-                let encoded_positions = get_encoded_positions(*packed) as u16;
+                let group = clear_encoded_positions(packed.to_native()) as u64;
+                let encoded_positions = get_encoded_positions(packed.to_native()) as u16;
                 doc_id_group.write(doc_id | group);
                 position.write(encoded_positions);
             }
@@ -671,20 +732,22 @@ mod tests {
         println!("{r0:#b}");
         println!("{r1:#b}");
 
-        let intersection = r0.intersect(&r1);
+        let intersection = r0.intersect(&r1, 1);
         let doc_ids = intersection.get_doc_ids();
         println!("{intersection}");
         println!("{doc_ids:?}");
     }
 
-    // #[test]
-    // fn add_one() {
-    //     let mut a = 1u64 << 32;
-    //     a += (u32::MAX as u64) + 1;
-    //     a += (u32::MAX as u64) + 1;
-    //     a += (u32::MAX as u64) + 1;
-    //     println!("{a:064b}");
-    //     let b = a >> 32;
-    //     println!("{b:032b}");
-    // }
+    #[test]
+    fn add_roaringish_packed() {
+        let doc_ids0 = vec![0];
+        let positions0 = vec![
+            Roaringish::from_positions_sorted(vec![15, 14]),
+        ];
+        let pl0 = PostingList::new(doc_ids0, positions0);
+        let r0 = RoaringishPacked::from(&pl0);
+        let r1 = &r0 + 1;
+        println!("{r0:b}");
+        println!("{r1:b}");
+    }
 }

@@ -20,20 +20,17 @@
                 }
             },
             "args": [
-                // "index-folder",
+                // "index-text",
                 // "./data1",
-                // "./db",
-                // "1",
-                // "2147483648",
-                // "0",
-                // "0",
-                // "5000000"
+                // "./test",
+                // "8589934592",
 
                 "search",
                 "1",
-                "./queries.txt",
-                "./db",
-                "2147483648",
+                "./queries4.txt",
+                "./msmarco-50",
+                "8589934592",
+                "ms-marco"
             ],
             "cwd": "${workspaceFolder}"
         }

@@ -12,15 +12,17 @@
 
 mod indexer;
 mod db;
-mod document;
 mod pl;
 mod utils;
 mod codecs;
-mod keyword_search;
 mod roaringish;
+mod searcher;
 
-pub use db::DB;
-pub use db::ShardsInfo;
-pub use keyword_search::KeywordSearch;
+pub use db::{DB, Stats};
 pub use indexer::Indexer;
-pub use roaringish::Roaringish;
+pub use indexer::CommonTokens;
+pub use searcher::Searcher;
+pub use utils::{normalize, tokenize};
+// pub use db::ShardsInfo;
+// pub use keyword_search::KeywordSearch;
+// pub use roaringish::Roaringish;

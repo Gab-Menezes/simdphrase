@@ -1,23 +1,18 @@
 #![feature(new_uninit)]
 
+use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{KeywordSearch, Roaringish, DB};
+use phrase_search::{normalize, tokenize, CommonTokens, Indexer, Searcher, Stats};
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
     slice::ParallelSlice,
 };
-use rkyv::{ser::serializers::AllocSerializer, Deserialize, Infallible, Serialize};
+use rkyv::{rend::unaligned::u16_ule, ser::DefaultSerializer, util::AlignedVec, Archive, Deserialize, Serialize};
 use std::{
-    fs::File,
-    io::{BufRead, BufReader},
-    path::PathBuf,
-    process::{Command, Stdio},
-    sync::atomic::{AtomicU32, Ordering::Relaxed},
+    fmt::{Debug, Display}, fs::File, io::{BufRead, BufReader}, iter::Map, path::PathBuf, process::{Command, Stdio}, sync::atomic::{AtomicU32, Ordering::Relaxed}
 };
-
-use ahash::AHashSet;
 
 #[derive(Parser, Debug)]
 struct CommandArgs {
@@ -69,14 +64,14 @@ struct Search {
     data_set: DataSet,
 }
 
-fn search<D>(args: Search) 
+fn search<D: Send + Sync>(args: Search)
 where
-    D: Serialize<AllocSerializer<256>> + 'static,
-    D::Archived: Deserialize<D, Infallible>
+    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive + 'static
 {
     let b = std::time::Instant::now();
 
-    let db = DB::<D>::open(&args.index_name, args.db_size);
+    let searcher = Searcher::<D>::new(&args.index_name, args.db_size).unwrap();
+    // let shard = searcher.get_shard(0).unwrap();
 
     println!();
     println!("Opening database took: {:?}", b.elapsed());
@@ -89,6 +84,7 @@ where
     for q in queries.iter() {
         let mut sum_micros = 0;
         let mut res = 0;
+        let stats = Stats::default();
         for _ in 0..args.runs {
             // Command::new("/bin/bash")
             //     .arg("./clear_cache.sh")
@@ -98,15 +94,18 @@ where
 
             let b = std::time::Instant::now();
 
-            let doc_ids: Vec<_> = db.search(q);
+            // searcher.foo(q);
+            let doc_ids = searcher.par_search(q, &stats);
+            // let doc_ids = shard.search(q, &stats);
+            // println!("{doc_ids:?}");
             // let doc_ids = db.get_documents_by_ids(doc_ids);
 
-            // println!("{doc_ids:?}");
             sum_micros += b.elapsed().as_micros();
             res = res.max(doc_ids.len());
         }
         let avg_ms = sum_micros as f64 / args.runs as f64 / 1000 as f64;
         println!("query: {q:?} took {avg_ms:.4} ms/iter ({res} results found)");
+        println!("{stats:#?}");
     }
 }
 
@@ -131,13 +130,22 @@ fn index_text(args: IndexFolder) {
         .collect();
 
     let b = std::time::Instant::now();
-    let next_doc_id = AtomicU32::new(0);
 
-    let db = DB::truncate(&args.index_name, args.db_size);
-    let indexer = db.indexer(&next_doc_id);
-    indexer.index(docs);
+    // let mut indexer = Indexer::new(&args.index_name, args.db_size, None, None, None);
+    let mut indexer = Indexer::new(
+        &args.index_name,
+        args.db_size,
+        None,
+        None,
+        None,
+    );
+    let num_docs = indexer.index(docs);
+    indexer.flush();
 
-    println!("Whole Indexing took {:?}", b.elapsed());
+    println!(
+        "Whole Indexing took {:?} ({num_docs} documents)",
+        b.elapsed()
+    );
 }
 
 // fn index_parquet(args: IndexFolder) {
@@ -185,32 +193,63 @@ fn index_msmarco(args: IndexFile) {
     println!("Start Indexing");
 
     let reader = BufReader::new(File::open(args.file).unwrap());
-    let it = reader
-        .lines()
-        .enumerate()
-        .map(|(i, line)| {
-            let line = line.unwrap();
-            let mut it = line.split("\t");
-            it.next().unwrap();
-            it.next().unwrap();
-            (it.next().unwrap().to_owned(), i as u32)
-        });
+    let it = reader.lines().enumerate().map(|(i, line)| {
+        let line = line.unwrap();
+        let mut it = line.split("\t");
+        it.next().unwrap();
+        it.next().unwrap();
+        (it.next().unwrap().to_owned(), i as u32)
+    });
 
     let b = std::time::Instant::now();
-    let next_doc_id = AtomicU32::new(0);
 
-    let db = DB::truncate(&args.index_name, args.db_size);
-    let indexer = db.indexer(&next_doc_id);
+    let mut indexer = Indexer::new(
+        &args.index_name,
+        args.db_size,
+        Some(500000),
+        Some(CommonTokens::FixedNum(50)),
+        Some(1460),
+    );
     let num_docs = indexer.index(it);
+    indexer.flush();
 
-    println!("Whole Indexing took {:?} (total number of documents: {num_docs})", b.elapsed());
+    println!(
+        "Whole Indexing took {:?} ({num_docs} documents)",
+        b.elapsed()
+    );
 }
 
 fn main() {
+    // for e in 0..7 {
+    //     for m in [1, 5] {
+    //         let n = 10usize.pow(e) * m;
+    //         let reader = BufReader::new(File::open("./fulldocs.tsv").unwrap());
+    //         let mut len_sum = 0u64;
+    //         let mut unique_tokens = AHashSet::new();
+    //         let mut lines = 0u64;
+    //         for line in reader.lines().take(n) {
+    //             let line = line.unwrap();
+    //             let mut it = line.split("\t");
+    //             it.next().unwrap();
+    //             it.next().unwrap();
+    //             let content = it.next().unwrap();
+    //             let content = normalize(content);
+    //             lines += 1;
+    //             for t in tokenize(&content) {
+    //                 len_sum += 1;
+    //                 unique_tokens.insert(t.to_owned());
+    //             }
+    //         }
+    //         println!("{lines} {len_sum} {}", unique_tokens.len());
+    //     }
+    // }
+    // return;
+    // // for n in [1, 5, 10, 50, 100, 500, 1000, 5000]
+    // // return;
     let args = CommandArgs::parse();
 
     // spawn rayon threads to avoid unecessary respawn
-    // rayon::ThreadPoolBuilder::new().build_global().unwrap();
+    rayon::ThreadPoolBuilder::new().build_global().unwrap();
 
     match args.ty {
         Ty::IndexText(arg) => index_text(arg),
