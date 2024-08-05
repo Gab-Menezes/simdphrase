@@ -18,6 +18,7 @@ rayon = "1.10.0"
 bincode = "1.3.3"
 clap = { version = "4.5.9", features = ["derive"] }
 rkyv = { git = "https://github.com/rkyv/rkyv.git", features = ["unaligned"] }
+rand = "0.8.5"
 # rkyv = "0.7.44"
 # parquet = "52.1.0"
 # arrow = "52.1.0"
