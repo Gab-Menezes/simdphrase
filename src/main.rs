@@ -273,29 +273,6 @@ unsafe fn intersect(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
         }
     }
 
-    macro_rules! advance {
-        ($i:ident, $v:ident) => {
-            $i += 4;
-            if $i >= $v.len() {
-                break;
-            } else {
-                continue;
-            }
-        };
-    }
-
-    macro_rules! advanceAB {
-        ($lhs_i:ident, $a:ident, $rhs_i:ident, $b:ident) => {
-            $lhs_i += 4;
-            $rhs_i += 4;
-            if $lhs_i >= $a.len() || $rhs_i >= $b.len() {
-                break;
-            } else {
-                continue;
-            }
-        };
-    }
-
     let min = lhs.len().min(rhs.len());
     let mut results: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
     let mut i = 0;
@@ -307,7 +284,7 @@ unsafe fn intersect(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
     let end_rhs = rhs.len() / 4 * 4;
     let a = lhs.get_unchecked(..end_lhs);
     let b = rhs.get_unchecked(..end_rhs);
-    loop {
+    while lhs_i < a.len() && rhs_i < b.len() {
         let lsb = word_wise_check(a, lhs_i, b, rhs_i, |v| v).to_bitmask();
         if lsb >= 1 {
             // this if is very likely to happend
@@ -339,7 +316,8 @@ unsafe fn intersect(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
             cmovnz(results.get_unchecked_mut(i), a2, a2b0123);
             i += a2b0123 as usize;
             if b3 {
-                advance!(rhs_i, b);
+                rhs_i += 4;
+                continue;
             }
 
             // cmovnz(results.get_unchecked_mut(i), a3, a3b0123);
@@ -347,27 +325,30 @@ unsafe fn intersect(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
             if a3b012 {
                 results.get_unchecked_mut(i).write(*a3);
                 i += 1;
-                advance!(lhs_i, a);
+                lhs_i += 4;
+                continue;
             } else if a3b3 {
                 results.get_unchecked_mut(i).write(*a3);
                 i += 1;
-                advanceAB!(lhs_i, a, rhs_i, b);
+                lhs_i += 4;
+                rhs_i += 4;
+                continue;
             }
 
             // we hope that this if is not reached, to reduce
             // branch miss prediction
             if a3 > b.get_unchecked(rhs_i + 3) {
-                advance!(rhs_i, b);
+                rhs_i += 4;
             } else {
-                advance!(lhs_i, a);
+                lhs_i += 4;
             }
         } else if *a.get_unchecked(lhs_i + 3) > *b.get_unchecked(rhs_i + 3) {
             // we want to avoid this else if from running, since it's almost
             // a 50-50%, making it hard to predict, for this reason we repeat
             // this same check inside the 
-            advance!(rhs_i, b);
+            rhs_i += 4;
         } else {
-            advance!(lhs_i, a);
+            lhs_i += 4;
         }
     }
 
@@ -493,32 +474,6 @@ fn main() {
         assert_eq!(int, gal, "{v0:?}\n\n{v1:?}");
     }
     return;
-    // for e in 0..7 {
-    //     for m in [1, 5] {
-    //         let n = 10usize.pow(e) * m;
-    //         let reader = BufReader::new(File::open("./fulldocs.tsv").unwrap());
-    //         let mut len_sum = 0u64;
-    //         let mut unique_tokens = AHashSet::new();
-    //         let mut lines = 0u64;
-    //         for line in reader.lines().take(n) {
-    //             let line = line.unwrap();
-    //             let mut it = line.split("\t");
-    //             it.next().unwrap();
-    //             it.next().unwrap();
-    //             let content = it.next().unwrap();
-    //             let content = normalize(content);
-    //             lines += 1;
-    //             for t in tokenize(&content) {
-    //                 len_sum += 1;
-    //                 unique_tokens.insert(t.to_owned());
-    //             }
-    //         }
-    //         println!("{lines} {len_sum} {}", unique_tokens.len());
-    //     }
-    // }
-    // return;
-    // // for n in [1, 5, 10, 50, 100, 500, 1000, 5000]
-    // // return;
     let args = CommandArgs::parse();
 
     // spawn rayon threads to avoid unecessary respawn
