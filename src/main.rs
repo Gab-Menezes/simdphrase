@@ -112,7 +112,7 @@ where
             let b = std::time::Instant::now();
 
             // searcher.foo(q);
-            let doc_ids = searcher.search(q, &stats);
+            let doc_ids = searcher.par_search(q, &stats);
             // let doc_ids = shard.search(q, &stats);
             // println!("{doc_ids:?}");
             // let doc_ids = db.get_documents_by_ids(doc_ids);
@@ -416,51 +416,51 @@ fn gallop(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
 }
 
 fn main() {
-    let mut rng = rand::thread_rng();
-    loop {
-        let v0_len = rng.gen_range(500000usize..20000000);
-        let mut v0: Vec<_> = (0..v0_len).map(|_| rng.gen_range(0u64..40000000)).collect();
+    // let mut rng = rand::thread_rng();
+    // loop {
+    //     let v0_len = rng.gen_range(500000usize..20000000);
+    //     let mut v0: Vec<_> = (0..v0_len).map(|_| rng.gen_range(0u64..40000000)).collect();
 
-        let v1_len = rng.gen_range(500000usize..20000000);
-        let mut v1: Vec<_> = (0..v1_len).map(|_| rng.gen_range(0u64..40000000)).collect();
+    //     let v1_len = rng.gen_range(500000usize..20000000);
+    //     let mut v1: Vec<_> = (0..v1_len).map(|_| rng.gen_range(0u64..40000000)).collect();
 
-        v0.sort_unstable();
-        v1.sort_unstable();
-        v0.dedup();
-        v1.dedup();
+    //     v0.sort_unstable();
+    //     v1.sort_unstable();
+    //     v0.dedup();
+    //     v1.dedup();
 
-        const ITERS: usize = 128;
-        let b = std::time::Instant::now();
-        for _ in 0..ITERS {
-            std::hint::black_box(unsafe { intersect(&v0, &v1) });
-        }
-        let t_intersect = b.elapsed().as_millis() as f64 / ITERS as f64;
+    //     const ITERS: usize = 128;
+    //     let b = std::time::Instant::now();
+    //     for _ in 0..ITERS {
+    //         std::hint::black_box(unsafe { intersect(&v0, &v1) });
+    //     }
+    //     let t_intersect = b.elapsed().as_millis() as f64 / ITERS as f64;
 
-        let b = std::time::Instant::now();
-        for _ in 0..ITERS {
-            std::hint::black_box(naive(&v0, &v1));
-        }
-        let t_naive = b.elapsed().as_millis() as f64 / ITERS as f64;
+    //     let b = std::time::Instant::now();
+    //     for _ in 0..ITERS {
+    //         std::hint::black_box(naive(&v0, &v1));
+    //     }
+    //     let t_naive = b.elapsed().as_millis() as f64 / ITERS as f64;
 
-        let b = std::time::Instant::now();
-        for _ in 0..ITERS {
-            std::hint::black_box(gallop(&v0, &v1));
-        }
-        let t_gallop = b.elapsed().as_millis() as f64 / ITERS as f64;
+    //     let b = std::time::Instant::now();
+    //     for _ in 0..ITERS {
+    //         std::hint::black_box(gallop(&v0, &v1));
+    //     }
+    //     let t_gallop = b.elapsed().as_millis() as f64 / ITERS as f64;
 
-        println!(
-            "i/n: {:.4} | i/g: {:.4} | n/g: {:.4}",
-            t_intersect / t_naive,
-            t_intersect / t_gallop,
-            t_naive / t_gallop
-        );
-        let int = unsafe { intersect(&v0, &v1) };
-        let nai = naive(&v0, &v1);
-        let gal = gallop(&v0, &v1);
-        assert_eq!(int, nai, "{v0:?}\n\n{v1:?}");
-        assert_eq!(int, gal, "{v0:?}\n\n{v1:?}");
-    }
-    return;
+    //     println!(
+    //         "i/n: {:.4} | i/g: {:.4} | n/g: {:.4}",
+    //         t_intersect / t_naive,
+    //         t_intersect / t_gallop,
+    //         t_naive / t_gallop
+    //     );
+    //     let int = unsafe { intersect(&v0, &v1) };
+    //     let nai = naive(&v0, &v1);
+    //     let gal = gallop(&v0, &v1);
+    //     assert_eq!(int, nai, "{v0:?}\n\n{v1:?}");
+    //     assert_eq!(int, gal, "{v0:?}\n\n{v1:?}");
+    // }
+    // return;
     let args = CommandArgs::parse();
 
     // spawn rayon threads to avoid unecessary respawn

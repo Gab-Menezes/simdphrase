@@ -27,7 +27,7 @@
 
                 "search",
                 "1",
-                "./queries4.txt",
+                "./queries5.txt",
                 "./msmarco-50",
                 "8589934592",
                 "ms-marco"

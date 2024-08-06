@@ -9,6 +9,7 @@
 #![feature(maybe_uninit_write_slice)]
 #![feature(vec_push_within_capacity)]
 #![feature(trivial_bounds)]
+#![feature(portable_simd)]
 
 mod indexer;
 mod db;
