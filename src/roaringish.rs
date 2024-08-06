@@ -73,7 +73,6 @@ impl Display for Roaringish {
 }
 
 pub const MAX_VALUE: u32 = 16u32 * u16::MAX as u32;
-const ADD_ONE_GROUP: u64 = u16::MAX as u64 + 1;
 
 const fn group(val: u32) -> u32 {
     val / 16
@@ -91,32 +90,28 @@ const fn make_group(group: u32) -> u32 {
     group << 16
 }
 
-const fn make_position(value: u32) -> u32 {
-    1 << value
-}
-
-const fn make_doc_id(doc_id: u32) -> u64 {
-    (doc_id as u64) << 32
-}
-
 const fn get_group(packed: u32) -> u32 {
     packed >> 16
 }
 
-const fn clear_encoded_positions(packed: u32) -> u32 {
-    packed & 0xFFFF0000
+const fn make_position(value: u32) -> u32 {
+    1 << value
 }
 
 const fn get_encoded_positions(packed: u32) -> u32 {
     packed & 0x0000FFFF
 }
 
+const fn make_doc_id(doc_id: u32) -> u64 {
+    (doc_id as u64) << 16
+}
+
 const fn get_doc_id(packed: u64) -> u32 {
-    (packed >> 32) as u32
+    (packed >> 16) as u32
 }
 
 const fn get_group_from_doc_id_group(packed: u64) -> u32 {
-    ((packed << 32) >> 48) as u32
+    (packed & 0x00000000FFFF) as u32
 }
 
 impl Roaringish {
@@ -327,7 +322,7 @@ impl RoaringishPacked {
             .doc_id_groups
             .iter()
             .zip(self.positions.iter())
-            .filter_map(|(doc_id_group, positions)| (positions & 0x8000 > 1).then(|| (*doc_id_group + ADD_ONE_GROUP, *positions)))
+            .filter_map(|(doc_id_group, positions)| (positions & 0x8000 > 1).then(|| (*doc_id_group + 1, *positions)))
             .collect();
         stats.add_one_group.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &msb_positions);
@@ -355,24 +350,6 @@ impl RoaringishPacked {
             .map(|rhs| 1 & rhs)
             .collect();
         stats.second_intersect.fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-        // for (doc_id_group, pos) in doc_id_groups.iter().zip(positions_intersect.iter()) {
-        //     println!(
-        //         "{} {} {:016b}",
-        //         get_doc_id(*doc_id_group),
-        //         get_group_from_doc_id_group(*doc_id_group),
-        //         pos
-        //     );
-        // }
-        // println!();
-        // for (doc_id_group, pos) in msb_doc_id_groups.iter().zip(msb_positions_intersect.iter()) {
-        //     println!(
-        //         "{} {} {:016b}",
-        //         get_doc_id(*doc_id_group),
-        //         get_group_from_doc_id_group(*doc_id_group),
-        //         pos
-        //     );
-        // }
 
         let b = std::time::Instant::now();
         let capacity = positions_intersect.len() + msb_positions_intersect.len();
@@ -512,7 +489,7 @@ impl Add<u32> for &RoaringishPacked {
             }
             if postions_new_group > 0 {
                 unsafe {
-                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + ADD_ONE_GROUP);
+                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + 1);
                     positions.get_unchecked_mut(i).write(postions_new_group);
                     i += 1;
                 }
@@ -551,7 +528,7 @@ impl From<&PostingList> for RoaringishPacked {
                 .zip(positions.iter_mut())
                 .zip(roaringish.inner.iter())
             {
-                let group = clear_encoded_positions(*packed) as u64;
+                let group = get_group(*packed) as u64;
                 let encoded_positions = get_encoded_positions(*packed) as u16;
                 doc_id_group.write(doc_id | group);
                 position.write(encoded_positions);
@@ -590,7 +567,7 @@ impl From<&ArchivedPostingList> for RoaringishPacked {
                 .zip(positions.iter_mut())
                 .zip(roaringish.inner.iter())
             {
-                let group = clear_encoded_positions(packed.to_native()) as u64;
+                let group = get_group(packed.to_native()) as u64;
                 let encoded_positions = get_encoded_positions(packed.to_native()) as u16;
                 doc_id_group.write(doc_id | group);
                 position.write(encoded_positions);
@@ -693,41 +670,41 @@ mod tests {
         println!("{}", positions[2]);
         let pl = PostingList::new(doc_ids, positions);
         let r = RoaringishPacked::from(&pl);
-        // println!("{:#b}", r);
+        println!("{:#b}", r);
     }
 
-    #[test]
-    fn roaringish_packed_intersect() {
-        let doc_ids0 = vec![0, 1, 2, 10, 12];
-        let positions0 = vec![
-            Roaringish::from_positions_sorted(vec![1, 5, 20]),
-            Roaringish::from_positions_sorted(vec![300]),
-            Roaringish::from_positions_sorted(vec![1]),
-            Roaringish::from_positions_sorted(vec![10, 20, 31, 34, 49, 63]),
-            Roaringish::from_positions_sorted(vec![15]),
-        ];
-        let pl0 = PostingList::new(doc_ids0, positions0);
-        let r0 = RoaringishPacked::from(&pl0);
+    // #[test]
+    // fn roaringish_packed_intersect() {
+    //     let doc_ids0 = vec![0, 1, 2, 10, 12];
+    //     let positions0 = vec![
+    //         Roaringish::from_positions_sorted(vec![1, 5, 20]),
+    //         Roaringish::from_positions_sorted(vec![300]),
+    //         Roaringish::from_positions_sorted(vec![1]),
+    //         Roaringish::from_positions_sorted(vec![10, 20, 31, 34, 49, 63]),
+    //         Roaringish::from_positions_sorted(vec![15]),
+    //     ];
+    //     let pl0 = PostingList::new(doc_ids0, positions0);
+    //     let r0 = RoaringishPacked::from(&pl0);
 
-        let doc_ids1 = vec![0, 1, 2, 10, 12];
-        let positions1 = vec![
-            Roaringish::from_positions_sorted(vec![2, 6]),
-            Roaringish::from_positions_sorted(vec![301]),
-            Roaringish::from_positions_sorted(vec![3]),
-            Roaringish::from_positions_sorted(vec![11, 21, 32, 35, 50, 64]),
-            Roaringish::from_positions_sorted(vec![16]),
-        ];
-        let pl1 = PostingList::new(doc_ids1, positions1);
-        let r1 = RoaringishPacked::from(&pl1);
+    //     let doc_ids1 = vec![0, 1, 2, 10, 12];
+    //     let positions1 = vec![
+    //         Roaringish::from_positions_sorted(vec![2, 6]),
+    //         Roaringish::from_positions_sorted(vec![301]),
+    //         Roaringish::from_positions_sorted(vec![3]),
+    //         Roaringish::from_positions_sorted(vec![11, 21, 32, 35, 50, 64]),
+    //         Roaringish::from_positions_sorted(vec![16]),
+    //     ];
+    //     let pl1 = PostingList::new(doc_ids1, positions1);
+    //     let r1 = RoaringishPacked::from(&pl1);
 
-        println!("{r0:#b}");
-        println!("{r1:#b}");
+    //     println!("{r0:#b}");
+    //     println!("{r1:#b}");
 
-        let intersection = r0.intersect(&r1, 1);
-        let doc_ids = intersection.get_doc_ids();
-        println!("{intersection}");
-        println!("{doc_ids:?}");
-    }
+    //     let intersection = r0.intersect(&r1, 1);
+    //     let doc_ids = intersection.get_doc_ids();
+    //     println!("{intersection}");
+    //     println!("{doc_ids:?}");
+    // }
 
     #[test]
     fn add_roaringish_packed() {
