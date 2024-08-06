@@ -17,6 +17,7 @@ use rkyv::{
     Serialize,
 };
 use std::{
+    arch::asm,
     fmt::{Debug, Display},
     fs::File,
     io::{BufRead, BufReader},
@@ -26,7 +27,6 @@ use std::{
     process::{Command, Stdio},
     simd::{cmp::SimdPartialEq, Mask, Simd},
     sync::atomic::{AtomicU32, Ordering::Relaxed},
-    arch::asm
 };
 
 #[derive(Parser, Debug)]
@@ -297,17 +297,14 @@ unsafe fn intersect(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
             let a0b0123 = ((bitmask & 0b0000_0000_0000_1111) > 0) as u8;
             let a1b0123 = ((bitmask & 0b0000_0000_1111_0000) > 0) as u8;
             let a2b0123 = ((bitmask & 0b0000_1111_0000_0000) > 0) as u8;
-            let b3 = (bitmask & 0b0000_1000_1000_1000) > 0;
-
-            // let a3b0123 = ((bitmask & 0b1111_0000_0000_0000) > 0) as u8;
-            let a3b012 = (bitmask & 0b0111_0000_0000_0000) > 0;
-            let a3b3 = (bitmask & 0b1000_0000_0000_0000) > 0;
-
+            let a3b0123 = ((bitmask & 0b1111_0000_0000_0000) > 0) as u8;
 
             let a0 = a.get_unchecked(lhs_i + 0);
             let a1 = a.get_unchecked(lhs_i + 1);
             let a2 = a.get_unchecked(lhs_i + 2);
             let a3 = a.get_unchecked(lhs_i + 3);
+
+            let b3 = b.get_unchecked(rhs_i + 3);
 
             cmovnz(results.get_unchecked_mut(i), a0, a0b0123);
             i += a0b0123 as usize;
@@ -315,37 +312,22 @@ unsafe fn intersect(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
             i += a1b0123 as usize;
             cmovnz(results.get_unchecked_mut(i), a2, a2b0123);
             i += a2b0123 as usize;
-            if b3 {
-                rhs_i += 4;
-                continue;
-            }
+            cmovnz(results.get_unchecked_mut(i), a3, a3b0123);
+            i += a3b0123 as usize;
 
-            // cmovnz(results.get_unchecked_mut(i), a3, a3b0123);
-            // i += a3b0123 as usize;
-            if a3b012 {
-                results.get_unchecked_mut(i).write(*a3);
-                i += 1;
-                lhs_i += 4;
-                continue;
-            } else if a3b3 {
-                results.get_unchecked_mut(i).write(*a3);
-                i += 1;
-                lhs_i += 4;
-                rhs_i += 4;
-                continue;
-            }
-
-            // we hope that this if is not reached, to reduce
-            // branch miss prediction
-            if a3 > b.get_unchecked(rhs_i + 3) {
-                rhs_i += 4;
-            } else {
-                lhs_i += 4;
+            // branching in this case seems to be the fastest
+            match a3.cmp(b3) {
+                std::cmp::Ordering::Greater => rhs_i += 4,
+                std::cmp::Ordering::Less => lhs_i += 4,
+                std::cmp::Ordering::Equal => {
+                    lhs_i += 4;
+                    rhs_i += 4;
+                }
             }
         } else if *a.get_unchecked(lhs_i + 3) > *b.get_unchecked(rhs_i + 3) {
             // we want to avoid this else if from running, since it's almost
             // a 50-50%, making it hard to predict, for this reason we repeat
-            // this same check inside the 
+            // this same check inside the
             rhs_i += 4;
         } else {
             lhs_i += 4;
@@ -427,7 +409,7 @@ fn gallop(lhs: &[u64], rhs: &[u64]) -> Vec<u64> {
                 i += 1;
                 lhs_i += 1;
                 rhs_i += 1;
-            },
+            }
         }
     }
     unsafe { Vec::from_raw_parts(Box::into_raw(results) as *mut _, i, min) }
@@ -466,7 +448,12 @@ fn main() {
         }
         let t_gallop = b.elapsed().as_millis() as f64 / ITERS as f64;
 
-        println!("i/n: {:.4} | i/g: {:.4} | n/g: {:.4}", t_intersect / t_naive, t_intersect / t_gallop, t_naive / t_gallop);
+        println!(
+            "i/n: {:.4} | i/g: {:.4} | n/g: {:.4}",
+            t_intersect / t_naive,
+            t_intersect / t_gallop,
+            t_naive / t_gallop
+        );
         let int = unsafe { intersect(&v0, &v1) };
         let nai = naive(&v0, &v1);
         let gal = gallop(&v0, &v1);
