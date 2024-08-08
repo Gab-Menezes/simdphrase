@@ -1,7 +1,6 @@
 use rkyv::{Archive, Deserialize, Serialize};
 use std::arch::x86_64::{
-    _mm512_alignr_epi32, _mm512_cmpeq_epi64_mask, _mm512_cmpneq_epi64_mask,
-    _mm512_mask_cmpneq_epi64_mask, _mm512_shuffle_epi32,
+    __m256i, _mm256_cmpeq_epi64, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_shuffle_epi32, _mm512_alignr_epi32, _mm512_cmpeq_epi64_mask, _mm512_cmpneq_epi64_mask, _mm512_mask_cmpneq_epi64_mask, _mm512_shuffle_epi32
 };
 use std::{
     arch::{
@@ -27,7 +26,7 @@ use crate::{
     target_feature = "avx512bw",
     target_feature = "avx512vp2intersect"
 ))]
-unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (__mmask8, __mmask8) {
+unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     let mut mask0: __mmask8;
     let mut mask1: __mmask8;
     asm!(
@@ -43,7 +42,7 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (__mmask8, __mmask8) {
 }
 
 #[cfg(all(target_feature = "avx512f", not(target_feature = "avx512vp2intersect")))]
-unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (__mmask8, __mmask8) {
+unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     let a1 = _mm512_alignr_epi32(a, a, 4);
     let a2 = _mm512_alignr_epi32(a, a, 8);
     let a3 = _mm512_alignr_epi32(a, a, 12);
@@ -69,6 +68,27 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (__mmask8, __mmask8) {
     let m1 = m01 | m11 | m21 | m31;
     let mask1 = m0 | ((0x55 & m1) << 1) | ((m1 >> 1) & 0x55);
     return (mask0, mask1);
+}
+#[cfg(all(target_feature = "avx2", not(target_feature = "avx512f")))]
+unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (u8, u8) {
+	let a1 = _mm256_permute2x128_si256(a, a, 1);
+	let b1 = _mm256_shuffle_epi32(b, _MM_PERM_BADC);
+
+    let m00 = _mm256_cmpeq_epi64(a , b);
+    let m01 = _mm256_cmpeq_epi64(a , b1);
+    let m10 = _mm256_cmpeq_epi64(a1 , b);
+    let m11 = _mm256_cmpeq_epi64(a1 , b1);
+
+	let l = _mm256_or_si256(m00, m01);
+	let h = _mm256_or_si256(m10, m11);
+    let mask0 = _mm256_or_si256(l, _mm256_permute2x128_si256(h, h, 1));
+    let mask0 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask0).to_bitmask() as u8 };
+
+    let l = _mm256_or_si256(m00, m10);
+    let h = _mm256_or_si256(m01, m11);
+    let mask1 = _mm256_or_si256(l, _mm256_shuffle_epi32(h, _MM_PERM_BADC));
+    let mask1 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask1).to_bitmask() as u8 };
+    (mask0, mask1)
 }
 
 #[derive(Default, Serialize, Deserialize, Archive)]
