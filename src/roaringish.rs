@@ -1,11 +1,18 @@
 use rkyv::{Archive, Deserialize, Serialize};
+use std::arch::x86_64::{
+    _mm512_alignr_epi32, _mm512_cmpeq_epi64_mask, _mm512_cmpneq_epi64_mask,
+    _mm512_mask_cmpneq_epi64_mask, _mm512_shuffle_epi32,
+};
 use std::{
-    arch::asm,
+    arch::{
+        asm,
+        x86_64::{__m512i, __mmask8, _MM_PERM_BADC},
+    },
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
     mem::MaybeUninit,
     ops::Add,
-    simd::{cmp::SimdPartialEq, Mask, Simd},
+    simd::{cmp::SimdPartialEq, u64x8, Mask, Simd},
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -13,6 +20,56 @@ use crate::{
     pl::{ArchivedPostingList, PostingList},
     Stats,
 };
+
+#[cfg(all(
+    target_feature = "avx512f",
+    target_feature = "avx512dq",
+    target_feature = "avx512bw",
+    target_feature = "avx512vp2intersect"
+))]
+unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (__mmask8, __mmask8) {
+    let mut mask0: __mmask8;
+    let mut mask1: __mmask8;
+    asm!(
+        "vp2intersectq k2, {0}, {1}",
+        in(zmm_reg) a,
+        in(zmm_reg) b,
+        out("k2") mask0,
+        out("k3") mask1,
+        options(pure, nomem, nostack),
+    );
+
+    (mask0, mask1)
+}
+
+#[cfg(all(target_feature = "avx512f", not(target_feature = "avx512vp2intersect")))]
+unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (__mmask8, __mmask8) {
+    let a1 = _mm512_alignr_epi32(a, a, 4);
+    let a2 = _mm512_alignr_epi32(a, a, 8);
+    let a3 = _mm512_alignr_epi32(a, a, 12);
+
+    let b1 = _mm512_shuffle_epi32(b, _MM_PERM_BADC);
+
+    let m00 = _mm512_cmpeq_epi64_mask(a, b);
+    let m01 = _mm512_cmpeq_epi64_mask(a, b1);
+    let m10 = _mm512_cmpeq_epi64_mask(a1, b);
+    let m11 = _mm512_cmpeq_epi64_mask(a1, b1);
+    let m20 = _mm512_cmpeq_epi64_mask(a2, b);
+    let m21 = _mm512_cmpeq_epi64_mask(a2, b1);
+    let m30 = _mm512_cmpeq_epi64_mask(a3, b);
+    let m31 = _mm512_cmpeq_epi64_mask(a3, b1);
+
+    let mask0 = m00
+        | m01
+        | (m10 | m11).rotate_left(2)
+        | (m20 | m21).rotate_left(4)
+        | (m30 | m31).rotate_left(6);
+
+    let m0 = m00 | m10 | m20 | m30;
+    let m1 = m01 | m11 | m21 | m31;
+    let mask1 = m0 | ((0x55 & m1) << 1) | ((m1 >> 1) & 0x55);
+    return (mask0, mask1);
+}
 
 #[derive(Default, Serialize, Deserialize, Archive)]
 #[archive_attr(derive(Debug))]
@@ -314,28 +371,44 @@ impl<'a> BorrowRoaringishPacked<'a> {
                     let a3b0123 = ((bitmask & 0b1111_0000_0000_0000) > 0) as u8;
 
                     cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a0, a0b0123);
-                    cmovnzu16(rhs_positions_result.get_unchecked_mut(i), get_b_pos::<0>(bitmask, b_positions, rhs_i), a0b0123);
+                    cmovnzu16(
+                        rhs_positions_result.get_unchecked_mut(i),
+                        get_b_pos::<0>(bitmask, b_positions, rhs_i),
+                        a0b0123,
+                    );
                     if FIRST {
                         cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a0_pos, a0b0123);
                     }
                     i += a0b0123 as usize;
 
                     cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a1, a1b0123);
-                    cmovnzu16(rhs_positions_result.get_unchecked_mut(i), get_b_pos::<4>(bitmask, b_positions, rhs_i), a1b0123);
+                    cmovnzu16(
+                        rhs_positions_result.get_unchecked_mut(i),
+                        get_b_pos::<4>(bitmask, b_positions, rhs_i),
+                        a1b0123,
+                    );
                     if FIRST {
                         cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a1_pos, a1b0123);
                     }
                     i += a1b0123 as usize;
 
                     cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a2, a2b0123);
-                    cmovnzu16(rhs_positions_result.get_unchecked_mut(i), get_b_pos::<8>(bitmask, b_positions, rhs_i), a2b0123);
+                    cmovnzu16(
+                        rhs_positions_result.get_unchecked_mut(i),
+                        get_b_pos::<8>(bitmask, b_positions, rhs_i),
+                        a2b0123,
+                    );
                     if FIRST {
                         cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a2_pos, a2b0123);
                     }
                     i += a2b0123 as usize;
 
                     cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a3, a3b0123);
-                    cmovnzu16(rhs_positions_result.get_unchecked_mut(i), get_b_pos::<12>(bitmask, b_positions, rhs_i), a3b0123);
+                    cmovnzu16(
+                        rhs_positions_result.get_unchecked_mut(i),
+                        get_b_pos::<12>(bitmask, b_positions, rhs_i),
+                        a3b0123,
+                    );
                     if FIRST {
                         cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a3_pos, a3b0123);
                     }
@@ -365,7 +438,9 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
                     if a0b0123 {
                         doc_id_groups_result.get_unchecked_mut(i).write(*a0);
-                        rhs_positions_result.get_unchecked_mut(i).write(*get_b_pos::<0>(bitmask, b_positions, rhs_i));
+                        rhs_positions_result
+                            .get_unchecked_mut(i)
+                            .write(*get_b_pos::<0>(bitmask, b_positions, rhs_i));
                         if FIRST {
                             lhs_positions_result.get_unchecked_mut(i).write(*a0_pos);
                         }
@@ -378,7 +453,9 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
                     if a1b0123 {
                         doc_id_groups_result.get_unchecked_mut(i).write(*a1);
-                        rhs_positions_result.get_unchecked_mut(i).write(*get_b_pos::<4>(bitmask, b_positions, rhs_i));
+                        rhs_positions_result
+                            .get_unchecked_mut(i)
+                            .write(*get_b_pos::<4>(bitmask, b_positions, rhs_i));
                         if FIRST {
                             lhs_positions_result.get_unchecked_mut(i).write(*a1_pos);
                         }
@@ -388,10 +465,12 @@ impl<'a> BorrowRoaringishPacked<'a> {
                             continue;
                         }
                     }
-        
+
                     if a2b0123 {
                         doc_id_groups_result.get_unchecked_mut(i).write(*a2);
-                        rhs_positions_result.get_unchecked_mut(i).write(*get_b_pos::<8>(bitmask, b_positions, rhs_i));
+                        rhs_positions_result
+                            .get_unchecked_mut(i)
+                            .write(*get_b_pos::<8>(bitmask, b_positions, rhs_i));
                         if FIRST {
                             lhs_positions_result.get_unchecked_mut(i).write(*a2_pos);
                         }
@@ -404,7 +483,9 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
                     if a3b0123 {
                         doc_id_groups_result.get_unchecked_mut(i).write(*a3);
-                        rhs_positions_result.get_unchecked_mut(i).write(*get_b_pos::<12>(bitmask, b_positions, rhs_i));
+                        rhs_positions_result
+                            .get_unchecked_mut(i)
+                            .write(*get_b_pos::<12>(bitmask, b_positions, rhs_i));
                         if FIRST {
                             lhs_positions_result.get_unchecked_mut(i).write(*a3_pos);
                         }
@@ -621,7 +702,10 @@ impl<'a> BorrowRoaringishPacked<'a> {
         }
     }
 
-    fn unrolled_naive_intersect<const FIRST: bool>(&self, rhs: &Self) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
+    fn unrolled_naive_intersect<const FIRST: bool>(
+        &self,
+        rhs: &Self,
+    ) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
         let lhs_positions = self.positions;
         let rhs_positions = rhs.positions;
         let lhs_doc_id_groups = self.doc_id_groups;
@@ -648,13 +732,15 @@ impl<'a> BorrowRoaringishPacked<'a> {
                 if iters == 0 {
                     break;
                 }
-    
+
                 for _ in 0..iters {
                     let lhs_doc_id_groups = *lhs_doc_id_groups.get_unchecked(lhs_i);
                     let rhs_doc_id_groups = *rhs_doc_id_groups.get_unchecked(rhs_i);
 
                     let rhs = *rhs_positions.get_unchecked(rhs_i);
-                    doc_id_groups_result.get_unchecked_mut(i).write(lhs_doc_id_groups);
+                    doc_id_groups_result
+                        .get_unchecked_mut(i)
+                        .write(lhs_doc_id_groups);
                     rhs_positions_result.get_unchecked_mut(i).write(rhs);
                     if FIRST {
                         let lhs = *lhs_positions.get_unchecked(lhs_i);
@@ -682,6 +768,14 @@ impl<'a> BorrowRoaringishPacked<'a> {
             )
         }
     }
+
+    // unsafe fn native_vp2intersectq_intersect(&self, rhs: &Self) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
+    //     let r0 = _mm512_setzero_epi32();
+    //     let r1 = _mm512_setzero_epi32();
+    //     let (m0, m1) = native_vp2intersectq(r0, r1);
+
+    //     todo!()
+    // }
 }
 
 impl RoaringishPacked {
@@ -727,14 +821,27 @@ impl RoaringishPacked {
         let rhs = BorrowRoaringishPacked::new(rhs);
         let b = std::time::Instant::now();
         // let (doc_id_groups, lhs_positions, rhs_positions) = lhs.naive_intersect::<true>(&rhs);
-        let (doc_id_groups, lhs_positions, rhs_positions) = lhs.unrolled_naive_intersect::<true>(&rhs);
+        let (doc_id_groups, lhs_positions, rhs_positions) =
+            lhs.unrolled_naive_intersect::<true>(&rhs);
         // let (doc_id_groups, lhs_positions, rhs_positions) = lhs.gallop_intersect::<true>(&rhs);
         // let (doc_id_groups, lhs_positions, rhs_positions) = unsafe { lhs.simd_intersect::<true, false>(&rhs) };
 
-        assert_eq!(lhs.unrolled_naive_intersect::<true>(&rhs), lhs.naive_intersect::<true>(&rhs));
-        assert_eq!(lhs.gallop_intersect::<true>(&rhs), lhs.naive_intersect::<true>(&rhs));
-        assert_eq!(unsafe { lhs.simd_intersect::<true, true>(&rhs) }, lhs.naive_intersect::<true>(&rhs));
-        assert_eq!(unsafe { lhs.simd_intersect::<true, false>(&rhs) }, lhs.naive_intersect::<true>(&rhs));
+        assert_eq!(
+            lhs.unrolled_naive_intersect::<true>(&rhs),
+            lhs.naive_intersect::<true>(&rhs)
+        );
+        assert_eq!(
+            lhs.gallop_intersect::<true>(&rhs),
+            lhs.naive_intersect::<true>(&rhs)
+        );
+        assert_eq!(
+            unsafe { lhs.simd_intersect::<true, true>(&rhs) },
+            lhs.naive_intersect::<true>(&rhs)
+        );
+        assert_eq!(
+            unsafe { lhs.simd_intersect::<true, false>(&rhs) },
+            lhs.naive_intersect::<true>(&rhs)
+        );
 
         stats
             .first_gallop
@@ -755,14 +862,27 @@ impl RoaringishPacked {
         let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &msb_positions);
         let b = std::time::Instant::now();
         // let (msb_doc_id_groups, _, msb_rhs_positions) = msb_packed.naive_intersect::<false>(&rhs);
-        let (msb_doc_id_groups, _, msb_rhs_positions) = msb_packed.unrolled_naive_intersect::<false>(&rhs);
+        let (msb_doc_id_groups, _, msb_rhs_positions) =
+            msb_packed.unrolled_naive_intersect::<false>(&rhs);
         // let (msb_doc_id_groups, _, msb_rhs_positions) = msb_packed.gallop_intersect::<false>(&rhs);
         // let (msb_doc_id_groups, _, msb_rhs_positions) = unsafe { msb_packed.simd_intersect::<false, false>(&rhs) };
 
-        assert_eq!(msb_packed.unrolled_naive_intersect::<false>(&rhs), msb_packed.naive_intersect::<false>(&rhs));
-        assert_eq!(msb_packed.gallop_intersect::<false>(&rhs), msb_packed.naive_intersect::<false>(&rhs));
-        assert_eq!(unsafe { msb_packed.simd_intersect::<false, true>(&rhs) }, msb_packed.naive_intersect::<false>(&rhs));
-        assert_eq!(unsafe { msb_packed.simd_intersect::<false, false>(&rhs) }, msb_packed.naive_intersect::<false>(&rhs));
+        assert_eq!(
+            msb_packed.unrolled_naive_intersect::<false>(&rhs),
+            msb_packed.naive_intersect::<false>(&rhs)
+        );
+        assert_eq!(
+            msb_packed.gallop_intersect::<false>(&rhs),
+            msb_packed.naive_intersect::<false>(&rhs)
+        );
+        assert_eq!(
+            unsafe { msb_packed.simd_intersect::<false, true>(&rhs) },
+            msb_packed.naive_intersect::<false>(&rhs)
+        );
+        assert_eq!(
+            unsafe { msb_packed.simd_intersect::<false, false>(&rhs) },
+            msb_packed.naive_intersect::<false>(&rhs)
+        );
 
         stats
             .second_gallop

@@ -1,6 +1,8 @@
 #![feature(new_uninit)]
 #![feature(portable_simd)]
 #![feature(maybe_uninit_slice)]
+#![feature(avx512_target_feature)]
+#![feature(stdarch_x86_avx512)]
 
 use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
@@ -17,16 +19,7 @@ use rkyv::{
     Serialize,
 };
 use std::{
-    arch::asm,
-    fmt::{Debug, Display},
-    fs::File,
-    io::{BufRead, BufReader},
-    iter::Map,
-    mem::MaybeUninit,
-    path::PathBuf,
-    process::{Command, Stdio},
-    simd::{cmp::SimdPartialEq, Mask, Simd},
-    sync::atomic::{AtomicU32, Ordering::Relaxed},
+    arch::{asm, x86_64::{__m512i, __mmask8, _mm512_loadu_epi64}}, fmt::{Debug, Display}, fs::File, hint::black_box, io::{BufRead, BufReader}, iter::Map, mem::MaybeUninit, path::PathBuf, process::{Command, Stdio}, simd::{cmp::SimdPartialEq, u64x8, Mask, Simd}, sync::atomic::{AtomicU32, Ordering::Relaxed}
 };
 
 #[derive(Parser, Debug)]
@@ -112,7 +105,8 @@ where
             let b = std::time::Instant::now();
 
             // searcher.foo(q);
-            let doc_ids = searcher.par_search(q, &stats);
+            let doc_ids = searcher.search(q, &stats);
+            // let doc_ids = searcher.par_search(q, &stats);
             // let doc_ids = shard.search(q, &stats);
             // println!("{doc_ids:?}");
             // let doc_ids = db.get_documents_by_ids(doc_ids);
