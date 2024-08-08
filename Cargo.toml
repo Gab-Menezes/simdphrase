@@ -1,6 +1,5 @@
 cargo-features = ["profile-rustflags"]
 
-
 [package]
 name = "phrase_search"
 version = "0.1.0"
