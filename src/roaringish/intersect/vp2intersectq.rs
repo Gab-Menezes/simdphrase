@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::arch::x86_64::{__m256i, __m512i};
+#[allow(unused_imports)]
 use std::{
     intrinsics::assume,
     mem::MaybeUninit,
