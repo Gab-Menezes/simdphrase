@@ -77,7 +77,7 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
 
 #[cfg(all(not(target_feature = "avx512f")))]
 #[inline(always)]
-unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (u8, u8) {
+unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (Simd<u64, 4>, Simd<u64, 4>) {
     use std::arch::x86_64::{_mm256_cmpeq_epi64, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_shuffle_epi32, _MM_PERM_BADC};
 
     let a1 = _mm256_permute2x128_si256(a, a, 1);
@@ -91,13 +91,14 @@ unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (u8, u8) {
     let l = _mm256_or_si256(m00, m01);
     let h = _mm256_or_si256(m10, m11);
     let mask0 = _mm256_or_si256(l, _mm256_permute2x128_si256(h, h, 1));
-    let mask0 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask0).to_bitmask() as u8 };
+    // let mask0 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask0).to_bitmask() as u8 };
 
     let l = _mm256_or_si256(m00, m10);
     let h = _mm256_or_si256(m01, m11);
     let mask1 = _mm256_or_si256(l, _mm256_shuffle_epi32(h, _MM_PERM_BADC));
-    let mask1 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask1).to_bitmask() as u8 };
-    (mask0, mask1)
+    // let mask1 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask1).to_bitmask() as u8 };
+    // (mask0, mask1)
+    (mask0.into(), mask1.into())
 }
 
 #[derive(Default, Serialize, Deserialize, Archive)]
@@ -852,9 +853,6 @@ impl<'a> BorrowRoaringishPacked<'a> {
                 (va, vb)
             };
 
-            #[cfg(target_feature = "avx512f")]
-            let (mask_a, mask_b) = vp2intersectq(va, vb);
-            #[cfg(not(target_feature = "avx512f"))]
             let (mask_a, mask_b) = vp2intersectq(va, vb);
 
             #[cfg(target_feature = "avx512f")]
@@ -873,12 +871,35 @@ impl<'a> BorrowRoaringishPacked<'a> {
                 i += mask_a.count_ones() as usize;
             }
 
+            #[cfg(not(target_feature = "avx512f"))]
+            {
+                let mut c = 0;
+                for (j, r) in mask_a.as_array().iter().enumerate() {
+                    let doc_id_groups = a.get_unchecked(lhs_i + j);
+                    doc_id_groups_result.get_unchecked_mut(i + c).write(*doc_id_groups);
+                    if FIRST {
+                        let positions = a_positions.get_unchecked(lhs_i + j);
+                        lhs_positions_result.get_unchecked_mut(i + c).write(*positions);
+                    }
+                    c += (*r == u64::MAX) as usize;
+                }
+
+                for (j, r) in mask_b.as_array().iter().enumerate() {
+                    let positions = b_positions.get_unchecked(rhs_i + j);
+                    rhs_positions_result.get_unchecked_mut(i).write(*positions);
+                    i += (*r == u64::MAX) as usize;
+                }
+            }
+
             let last_a = *a.as_ptr().add(lhs_i + N);
             let last_b = *b.as_ptr().add(rhs_i + N);
+
             let va: Simd<u64, N> = va.into();
             let vb: Simd<u64, N> = vb.into();
+
             let last_va = Simd::splat(last_a);
             let last_vb = Simd::splat(last_b);
+
             lhs_i += 64 - va.simd_le(last_vb).to_bitmask().leading_zeros() as usize;
             rhs_i += 64 - vb.simd_le(last_va).to_bitmask().leading_zeros() as usize;
         }
