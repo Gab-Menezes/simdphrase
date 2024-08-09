@@ -161,7 +161,7 @@ impl Intersect for Vp2Intersectq {
             let (mask_a, mask_b) = unsafe { vp2intersectq(va, vb) };
 
             #[cfg(target_feature = "avx512f")]
-            {
+            unsafe {
                 use std::arch::x86_64::{
                     _mm512_loadu_epi16, _mm512_mask_compressstoreu_epi16,
                     _mm512_mask_compressstoreu_epi64,
