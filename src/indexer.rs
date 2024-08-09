@@ -8,7 +8,7 @@ use std::{
 
 use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
-use rkyv::{ser::DefaultSerializer, util::AlignedVec, Archive, Deserialize, Serialize};
+use rkyv::{api::high::HighSerializer, ser::{allocator::ArenaHandle}, util::AlignedVec, Archive, Deserialize, Serialize};
 use roaring::RoaringBitmap;
 
 use crate::{
@@ -96,7 +96,7 @@ pub enum CommonTokens {
 #[derive(Debug)]
 struct InnerIndexer<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive,
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive,
 {
     next_token_id: u32,
     token_to_token_id: AHashMap<Box<str>, u32>,
@@ -114,7 +114,7 @@ where
 
 impl<D> InnerIndexer<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {
@@ -304,7 +304,7 @@ where
 
 pub struct Indexer<'a, D>
 where
-    D: for<'b> Serialize<DefaultSerializer<'b, AlignedVec, rkyv::rancor::Error>> + Archive,
+    D: for<'b> Serialize<HighSerializer<'b, AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>> + Archive,
 {
     path: &'a Path,
     shard_db_size: usize,
@@ -318,7 +318,7 @@ where
 
 impl<'a, D> Indexer<'a, D>
 where
-    D: for<'b> Serialize<DefaultSerializer<'b, AlignedVec, rkyv::rancor::Error>>
+    D: for<'b> Serialize<HighSerializer<'b, AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {

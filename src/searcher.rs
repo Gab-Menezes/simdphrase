@@ -4,29 +4,31 @@ use std::{
 };
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use rkyv::{ser::DefaultSerializer, util::AlignedVec, Archive, Deserialize, Serialize};
+use rkyv::{
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Deserialize,
+    Serialize,
+};
 
 use crate::{roaringish::intersect::Intersect, Stats, DB};
 
 pub struct Searcher<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive,
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+        + Archive,
 {
     pub(crate) shards: Box<[DB<D>]>,
 }
 
 impl<D> Searcher<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {
     pub fn new(path: &Path, db_size: usize) -> Option<Self> {
         let paths: Option<Vec<PathBuf>> = std::fs::read_dir(path)
             .ok()?
-            .map(|path| {
-                path.ok().map(|p| p.path())
-            })
+            .map(|path| path.ok().map(|p| p.path()))
             .collect();
         let mut paths = paths?;
         paths.sort_unstable();
@@ -62,7 +64,7 @@ where
 
 impl<D> Searcher<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + Send
         + Sync

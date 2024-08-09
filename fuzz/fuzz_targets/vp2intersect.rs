@@ -120,12 +120,20 @@ unsafe fn emulate_vp2intersectq_avx2(a: __m256i, b: __m256i) -> (u8, u8) {
 
 fuzz_target!(|v: ([i64; 8], [i64; 8])| {
     unsafe {
-        let a = _mm512_loadu_epi64(&v.0 as *const _);
-        let b = _mm512_loadu_epi64(&v.1 as *const _);
-        assert_eq!(emulate_vp2intersectq_avx512(a, b), native_vp2intersectq_avx512(a, b));
-
-        let a = _mm256_loadu_si256(&v.0 as *const _ as *const _);
-        let b = _mm256_loadu_si256(&v.1 as *const _ as *const _);
-        assert_eq!(emulate_vp2intersectq_avx2(a, b), native_vp2intersectq_avx2(a, b));
+        #[cfg(all(
+            target_feature = "avx512f",
+            target_feature = "avx512dq",
+            target_feature = "avx512bw",
+            target_feature = "avx512vp2intersect"
+        ))]
+        {
+            let a = _mm512_loadu_epi64(&v.0 as *const _);
+            let b = _mm512_loadu_epi64(&v.1 as *const _);
+            assert_eq!(emulate_vp2intersectq_avx512(a, b), native_vp2intersectq_avx512(a, b));
+            
+            let a = _mm256_loadu_si256(&v.0 as *const _ as *const _);
+            let b = _mm256_loadu_si256(&v.1 as *const _ as *const _);
+            assert_eq!(emulate_vp2intersectq_avx2(a, b), native_vp2intersectq_avx2(a, b));
+        }
     }
 });

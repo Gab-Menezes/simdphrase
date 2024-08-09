@@ -107,13 +107,13 @@ impl Intersect for Vp2Intersectq {
     ) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
         let lhs_positions = lhs.positions;
         let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = rhs.doc_id_groups;
+        let lhs_doc_id_groups = lhs.doc_id_groups;
         let rhs_doc_id_groups = rhs.doc_id_groups;
 
         let mut lhs_i = 0;
         let mut rhs_i = 0;
 
-        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len());
+        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len()) + 1;
         let mut i = 0;
         let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
         let mut lhs_positions_result: Box<[MaybeUninit<u16>]> = if FIRST {
@@ -220,17 +220,20 @@ impl Intersect for Vp2Intersectq {
                 }
             }
 
-            let last_a = unsafe { *a.as_ptr().add(lhs_i + N) };
-            let last_b = unsafe { *b.as_ptr().add(rhs_i + N) };
+            let last_a = unsafe { *a.as_ptr().add(lhs_i + N - 1) };
+            let last_b = unsafe { *b.as_ptr().add(rhs_i + N - 1) };
 
-            let va: Simd<u64, N> = va.into();
-            let vb: Simd<u64, N> = vb.into();
+            lhs_i += N * (last_a <= last_b) as usize;
+            rhs_i += N * (last_b <= last_a) as usize;
 
-            let last_va = Simd::splat(last_a);
-            let last_vb = Simd::splat(last_b);
+            // let va: Simd<u64, N> = va.into();
+            // let vb: Simd<u64, N> = vb.into();
 
-            lhs_i += 64 - va.simd_le(last_vb).to_bitmask().leading_zeros() as usize;
-            rhs_i += 64 - vb.simd_le(last_va).to_bitmask().leading_zeros() as usize;
+            // let last_va = Simd::splat(last_a);
+            // let last_vb = Simd::splat(last_b);
+
+            // lhs_i += 64 - va.simd_le(last_vb).to_bitmask().leading_zeros() as usize;
+            // rhs_i += 64 - vb.simd_le(last_va).to_bitmask().leading_zeros() as usize;
         }
 
         // for the remaining elements we can do a 2 pointer approach

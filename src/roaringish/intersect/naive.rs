@@ -77,7 +77,7 @@ impl Intersect for UnrolledNaiveIntersect {
     fn intersect<const FIRST: bool>(lhs: &BorrowRoaringishPacked, rhs: &BorrowRoaringishPacked) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
         let lhs_positions = lhs.positions;
         let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = rhs.doc_id_groups;
+        let lhs_doc_id_groups = lhs.doc_id_groups;
         let rhs_doc_id_groups = rhs.doc_id_groups;
 
         let mut lhs_i = 0;

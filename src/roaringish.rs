@@ -179,10 +179,10 @@ impl Roaringish {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct RoaringishPacked {
-    doc_id_groups: Box<[u64]>,
-    positions: Box<[u16]>,
+    pub doc_id_groups: Box<[u64]>,
+    pub positions: Box<[u16]>,
 }
 
 pub struct BorrowRoaringishPacked<'a> {
@@ -555,30 +555,30 @@ impl Binary for RoaringishPacked {
     }
 }
 
-impl Debug for RoaringishPacked {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut list = f.debug_list();
-        for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
-            list.entry_with(|f| {
-                let doc_id = get_doc_id(*doc_id_group);
-                let group = get_group_from_doc_id_group(*doc_id_group);
-                f.debug_tuple("")
-                    .field(&doc_id)
-                    .field(&group)
-                    .field_with(|f| {
-                        f.debug_list()
-                            .entries(
-                                (0..16u32)
-                                    .filter_map(|i| ((encoded_values >> i) & 1 == 1).then_some(i)),
-                            )
-                            .finish()
-                    })
-                    .finish()
-            });
-        }
-        list.finish()
-    }
-}
+// impl Debug for RoaringishPacked {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         let mut list = f.debug_list();
+//         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
+//             list.entry_with(|f| {
+//                 let doc_id = get_doc_id(*doc_id_group);
+//                 let group = get_group_from_doc_id_group(*doc_id_group);
+//                 f.debug_tuple("")
+//                     .field(&doc_id)
+//                     .field(&group)
+//                     .field_with(|f| {
+//                         f.debug_list()
+//                             .entries(
+//                                 (0..16u32)
+//                                     .filter_map(|i| ((encoded_values >> i) & 1 == 1).then_some(i)),
+//                             )
+//                             .finish()
+//                     })
+//                     .finish()
+//             });
+//         }
+//         list.finish()
+//     }
+// }
 
 impl Display for RoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -610,6 +610,10 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
         let positions: Result<Vec<u16>, _> =
             u.arbitrary_iter()?.take(doc_id_groups.len()).collect();
         let positions = positions?;
+
+        if doc_id_groups.len() != positions.len() {
+            return Err(arbitrary::Error::NotEnoughData);
+        }
 
         Ok(Self {
             doc_id_groups: doc_id_groups.into_boxed_slice(),

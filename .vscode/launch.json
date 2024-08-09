@@ -17,7 +17,11 @@
                 "filter": {
                     "name": "phrase_search",
                     "kind": "bin"
-                }
+                },
+                // "env": {
+                //     // "RUSTFLAGS": "-C target-feature=+avx"
+                //     "RUSTFLAGS": "-C target-cpu=native"
+                // }
             },
             "args": [
                 // "index-text",

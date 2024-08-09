@@ -20,7 +20,7 @@ use heed::{
     Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
 };
 use rkyv::{
-    ser::DefaultSerializer, util::AlignedVec, vec::ArchivedVec, Archive, Deserialize, Serialize,
+    api::high::HighSerializer, ser::{allocator::ArenaHandle}, util::AlignedVec, vec::ArchivedVec, Archive, Deserialize, Serialize
 };
 use roaring::RoaringBitmap;
 
@@ -135,7 +135,7 @@ pub struct ShardsInfo {
 
 pub struct DB<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive,
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive,
 {
     pub(crate) env: Env,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
@@ -148,18 +148,18 @@ where
 }
 
 unsafe impl<D> Send for DB<D> where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive + Send
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Send
 {
 }
 
 unsafe impl<D> Sync for DB<D> where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>> + Archive + Sync
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Sync
 {
 }
 
 impl<D> DB<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {
@@ -280,7 +280,7 @@ where
 
 impl<D> DB<D>
 where
-    D: for<'a> Serialize<DefaultSerializer<'a, AlignedVec, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {
