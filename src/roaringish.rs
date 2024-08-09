@@ -847,9 +847,9 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
             #[cfg(not(target_feature = "avx512f"))]
             let (va, vb) = {
-                use std::arch::x86_64::_mm256_load_si256;
-                let va = _mm256_load_si256(a.as_ptr().add(lhs_i) as *const _);
-                let vb = _mm256_load_si256(b.as_ptr().add(rhs_i) as *const _);
+                use std::arch::x86_64::_mm256_loadu_si256;
+                let va = _mm256_loadu_si256(a.as_ptr().add(lhs_i) as *const _);
+                let vb = _mm256_loadu_si256(b.as_ptr().add(rhs_i) as *const _);
                 (va, vb)
             };
 
