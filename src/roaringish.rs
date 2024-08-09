@@ -72,7 +72,7 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     return (mask0, mask1);
 }
 
-#[cfg(all(target_feature = "avx2", not(target_feature = "avx512f")))]
+#[cfg(all(not(target_feature = "avx512f")))]
 unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (u8, u8) {
     let a1 = _mm256_permute2x128_si256(a, a, 1);
     let b1 = _mm256_shuffle_epi32(b, _MM_PERM_BADC);
