@@ -1,18 +1,16 @@
 use rkyv::{Archive, Deserialize, Serialize};
+#[allow(unused_imports)]
 use std::arch::x86_64::{
-    __m256i, _mm256_cmpeq_epi64, _mm256_load_si256, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_shuffle_epi32, _mm512_alignr_epi32, _mm512_cmpeq_epi64_mask, _mm512_cmpneq_epi64_mask, _mm512_loadu_epi16, _mm512_loadu_epi64, _mm512_mask_cmpneq_epi64_mask, _mm512_mask_compressstoreu_epi16, _mm512_mask_compressstoreu_epi64, _mm512_shuffle_epi32
+    __m256i,
+    __m512i
 };
 use std::simd::cmp::SimdPartialOrd;
 use std::{
-    arch::{
-        asm,
-        x86_64::{__m512i, __mmask8, _MM_PERM_BADC},
-    },
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
     mem::MaybeUninit,
     ops::Add,
-    simd::{cmp::SimdPartialEq, u64x8, Mask, Simd},
+    simd::{cmp::SimdPartialEq, Mask, Simd},
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -29,6 +27,8 @@ use crate::{
 ))]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
+    use std::arch::{asm, x86_64::__mmask8};
+
     let mut mask0: __mmask8;
     let mut mask1: __mmask8;
     asm!(
@@ -46,6 +46,8 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
 #[cfg(all(target_feature = "avx512f", not(target_feature = "avx512vp2intersect")))]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
+    use std::arch::x86_64::{_mm512_alignr_epi32, _mm512_cmpeq_epi64_mask, _mm512_shuffle_epi32, _MM_PERM_BADC};
+
     let a1 = _mm512_alignr_epi32(a, a, 4);
     let a2 = _mm512_alignr_epi32(a, a, 8);
     let a3 = _mm512_alignr_epi32(a, a, 12);
@@ -76,6 +78,8 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
 #[cfg(all(not(target_feature = "avx512f")))]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (u8, u8) {
+    use std::arch::x86_64::{_mm256_cmpeq_epi64, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_shuffle_epi32, _MM_PERM_BADC};
+
     let a1 = _mm256_permute2x128_si256(a, a, 1);
     let b1 = _mm256_shuffle_epi32(b, _MM_PERM_BADC);
 
@@ -312,7 +316,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
         #[inline(always)]
         fn cmovnzu16(value: &mut MaybeUninit<u16>, v: &u16, condition: u8) {
             unsafe {
-                asm! {
+                std::arch::asm! {
                     "test {0}, {0}",
                     "cmovnz {1:r}, {2:r}",
                     in(reg_byte) condition,
@@ -326,7 +330,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
         #[inline(always)]
         fn cmovnzu64(value: &mut MaybeUninit<u64>, v: &u64, condition: u8) {
             unsafe {
-                asm! {
+                std::arch::asm! {
                     "test {0}, {0}",
                     "cmovnz {1:r}, {2:r}",
                     in(reg_byte) condition,
@@ -834,6 +838,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
         while lhs_i < a.len() && rhs_i < b.len() {
             #[cfg(target_feature = "avx512f")]
             let (va, vb) = {
+                use std::arch::x86_64::_mm512_loadu_epi64;
                 let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
                 let vb = _mm512_loadu_epi64(b.as_ptr().add(rhs_i) as *const _);
                 (va, vb)
@@ -841,6 +846,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
             #[cfg(not(target_feature = "avx512f"))]
             let (va, vb) = {
+                use std::arch::x86_64::_mm256_load_si256;
                 let va = _mm256_load_si256(a.as_ptr().add(lhs_i) as *const _);
                 let vb = _mm256_load_si256(b.as_ptr().add(rhs_i) as *const _);
                 (va, vb)
@@ -853,6 +859,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
             #[cfg(target_feature = "avx512f")]
             {
+                use std::arch::x86_64::{_mm512_mask_compressstoreu_epi64, _mm512_mask_compressstoreu_epi16, _mm512_loadu_epi16};
                 _mm512_mask_compressstoreu_epi64(doc_id_groups_result.as_mut_ptr().add(i) as *mut _, mask_a, va);
 
                 let vb_positions = _mm512_loadu_epi16(b_positions.as_ptr().add(rhs_i) as *const _);
