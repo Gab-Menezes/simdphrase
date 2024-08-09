@@ -27,6 +27,7 @@ use crate::{
     target_feature = "avx512bw",
     target_feature = "avx512vp2intersect"
 ))]
+#[inline(always)]
 unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     let mut mask0: __mmask8;
     let mut mask1: __mmask8;
@@ -43,6 +44,7 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
 }
 
 #[cfg(all(target_feature = "avx512f", not(target_feature = "avx512vp2intersect")))]
+#[inline(always)]
 unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     let a1 = _mm512_alignr_epi32(a, a, 4);
     let a2 = _mm512_alignr_epi32(a, a, 8);
@@ -72,6 +74,7 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
 }
 
 #[cfg(all(not(target_feature = "avx512f")))]
+#[inline(always)]
 unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (u8, u8) {
     let a1 = _mm256_permute2x128_si256(a, a, 1);
     let b1 = _mm256_shuffle_epi32(b, _MM_PERM_BADC);
