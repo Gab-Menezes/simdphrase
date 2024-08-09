@@ -1,9 +1,9 @@
+pub mod intersect;
+
+use arbitrary::{Arbitrary, Unstructured};
 use rkyv::{Archive, Deserialize, Serialize};
 #[allow(unused_imports)]
-use std::arch::x86_64::{
-    __m256i,
-    __m512i
-};
+use std::arch::x86_64::{__m256i, __m512i};
 use std::simd::cmp::SimdPartialOrd;
 use std::{
     fmt::{Binary, Debug, Display},
@@ -19,87 +19,9 @@ use crate::{
     Stats,
 };
 
-#[cfg(all(
-    target_feature = "avx512f",
-    target_feature = "avx512dq",
-    target_feature = "avx512bw",
-    target_feature = "avx512vp2intersect"
-))]
-#[inline(always)]
-unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
-    use std::arch::{asm, x86_64::__mmask8};
+use self::intersect::Intersect;
 
-    let mut mask0: __mmask8;
-    let mut mask1: __mmask8;
-    asm!(
-        "vp2intersectq k2, {0}, {1}",
-        in(zmm_reg) a,
-        in(zmm_reg) b,
-        out("k2") mask0,
-        out("k3") mask1,
-        options(pure, nomem, nostack),
-    );
-
-    (mask0, mask1)
-}
-
-#[cfg(all(target_feature = "avx512f", not(target_feature = "avx512vp2intersect")))]
-#[inline(always)]
-unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
-    use std::arch::x86_64::{_mm512_alignr_epi32, _mm512_cmpeq_epi64_mask, _mm512_shuffle_epi32, _MM_PERM_BADC};
-
-    let a1 = _mm512_alignr_epi32(a, a, 4);
-    let a2 = _mm512_alignr_epi32(a, a, 8);
-    let a3 = _mm512_alignr_epi32(a, a, 12);
-
-    let b1 = _mm512_shuffle_epi32(b, _MM_PERM_BADC);
-
-    let m00 = _mm512_cmpeq_epi64_mask(a, b);
-    let m01 = _mm512_cmpeq_epi64_mask(a, b1);
-    let m10 = _mm512_cmpeq_epi64_mask(a1, b);
-    let m11 = _mm512_cmpeq_epi64_mask(a1, b1);
-    let m20 = _mm512_cmpeq_epi64_mask(a2, b);
-    let m21 = _mm512_cmpeq_epi64_mask(a2, b1);
-    let m30 = _mm512_cmpeq_epi64_mask(a3, b);
-    let m31 = _mm512_cmpeq_epi64_mask(a3, b1);
-
-    let mask0 = m00
-        | m01
-        | (m10 | m11).rotate_left(2)
-        | (m20 | m21).rotate_left(4)
-        | (m30 | m31).rotate_left(6);
-
-    let m0 = m00 | m10 | m20 | m30;
-    let m1 = m01 | m11 | m21 | m31;
-    let mask1 = m0 | ((0x55 & m1) << 1) | ((m1 >> 1) & 0x55);
-    return (mask0, mask1);
-}
-
-#[cfg(all(not(target_feature = "avx512f")))]
-#[inline(always)]
-unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (Simd<u64, 4>, Simd<u64, 4>) {
-    use std::arch::x86_64::{_mm256_cmpeq_epi64, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_shuffle_epi32, _MM_PERM_BADC};
-
-    let a1 = _mm256_permute2x128_si256(a, a, 1);
-    let b1 = _mm256_shuffle_epi32(b, _MM_PERM_BADC);
-
-    let m00 = _mm256_cmpeq_epi64(a, b);
-    let m01 = _mm256_cmpeq_epi64(a, b1);
-    let m10 = _mm256_cmpeq_epi64(a1, b);
-    let m11 = _mm256_cmpeq_epi64(a1, b1);
-
-    let l = _mm256_or_si256(m00, m01);
-    let h = _mm256_or_si256(m10, m11);
-    let mask0 = _mm256_or_si256(l, _mm256_permute2x128_si256(h, h, 1));
-    // let mask0 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask0).to_bitmask() as u8 };
-
-    let l = _mm256_or_si256(m00, m10);
-    let h = _mm256_or_si256(m01, m11);
-    let mask1 = _mm256_or_si256(l, _mm256_shuffle_epi32(h, _MM_PERM_BADC));
-    // let mask1 = unsafe { std::mem::transmute::<__m256i, Mask<i64, 4>>(mask1).to_bitmask() as u8 };
-    // (mask0, mask1)
-    (mask0.into(), mask1.into())
-}
+// use self::intersect::Intersect;
 
 #[derive(Default, Serialize, Deserialize, Archive)]
 #[archive_attr(derive(Debug))]
@@ -263,690 +185,23 @@ pub struct RoaringishPacked {
     positions: Box<[u16]>,
 }
 
-struct BorrowRoaringishPacked<'a> {
-    doc_id_groups: &'a [u64],
-    positions: &'a [u16],
+pub struct BorrowRoaringishPacked<'a> {
+    pub(crate) doc_id_groups: &'a [u64],
+    pub(crate) positions: &'a [u16],
 }
 
 impl<'a> BorrowRoaringishPacked<'a> {
-    fn new(r: &'a RoaringishPacked) -> Self {
+    pub fn new(r: &'a RoaringishPacked) -> Self {
         Self {
             doc_id_groups: &r.doc_id_groups,
             positions: &r.positions,
         }
     }
 
-    fn from_raw(doc_id_groups: &'a [u64], positions: &'a [u16]) -> Self {
+    pub fn from_raw(doc_id_groups: &'a [u64], positions: &'a [u16]) -> Self {
         Self {
             doc_id_groups,
             positions,
-        }
-    }
-
-    unsafe fn simd_intersect<const FIRST: bool, const CMOV: bool>(
-        &self,
-        rhs: &Self,
-    ) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
-        #[inline(always)]
-        unsafe fn word_wise_check<F: Fn(u64) -> u64>(
-            a: &[u64],
-            lhs_i: usize,
-            b: &[u64],
-            rhs_i: usize,
-            op: F,
-        ) -> Mask<i32, 16> {
-            let a0 = op(*a.get_unchecked(lhs_i + 0)) as u32;
-            let a1 = op(*a.get_unchecked(lhs_i + 1)) as u32;
-            let a2 = op(*a.get_unchecked(lhs_i + 2)) as u32;
-            let a3 = op(*a.get_unchecked(lhs_i + 3)) as u32;
-            let amask = Simd::from_array([
-                a0, a0, a0, a0, a1, a1, a1, a1, a2, a2, a2, a2, a3, a3, a3, a3,
-            ]);
-
-            let b0 = op(*b.get_unchecked(rhs_i + 0)) as u32;
-            let b1 = op(*b.get_unchecked(rhs_i + 1)) as u32;
-            let b2 = op(*b.get_unchecked(rhs_i + 2)) as u32;
-            let b3 = op(*b.get_unchecked(rhs_i + 3)) as u32;
-            let bmask = Simd::from_array([
-                b0, b1, b2, b3, b0, b1, b2, b3, b0, b1, b2, b3, b0, b1, b2, b3,
-            ]);
-
-            amask.simd_eq(bmask)
-        }
-
-        #[inline(always)]
-        fn cmovnzu16(value: &mut MaybeUninit<u16>, v: &u16, condition: u8) {
-            unsafe {
-                std::arch::asm! {
-                    "test {0}, {0}",
-                    "cmovnz {1:r}, {2:r}",
-                    in(reg_byte) condition,
-                    inlateout(reg) *value,
-                    in(reg) *v,
-                    options(pure, nomem, nostack),
-                };
-            }
-        }
-
-        #[inline(always)]
-        fn cmovnzu64(value: &mut MaybeUninit<u64>, v: &u64, condition: u8) {
-            unsafe {
-                std::arch::asm! {
-                    "test {0}, {0}",
-                    "cmovnz {1:r}, {2:r}",
-                    in(reg_byte) condition,
-                    inlateout(reg) *value,
-                    in(reg) *v,
-                    options(pure, nomem, nostack),
-                };
-            }
-        }
-
-        #[inline(always)]
-        fn get_b_pos<const SHIFT: usize>(bitmask: u64, b_positions: &[u16], rhs_i: usize) -> &u16 {
-            let idx = (bitmask >> SHIFT).trailing_zeros() % 4;
-            unsafe { b_positions.get_unchecked(rhs_i + idx as usize) }
-        }
-
-        let lhs_positions = self.positions;
-        let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = self.doc_id_groups;
-        let rhs_doc_id_groups = rhs.doc_id_groups;
-
-        let mut lhs_i = 0;
-        let mut rhs_i = 0;
-
-        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len());
-        let mut i = 0;
-        let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
-        let mut lhs_positions_result: Box<[MaybeUninit<u16>]> = if FIRST {
-            Box::new_uninit_slice(min)
-        } else {
-            Box::new_uninit_slice(0)
-        };
-        let mut rhs_positions_result: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(min);
-
-        let end_lhs = lhs_doc_id_groups.len() / 4 * 4;
-        let end_rhs = rhs_doc_id_groups.len() / 4 * 4;
-        let a = lhs_doc_id_groups.get_unchecked(..end_lhs);
-        let b = rhs_doc_id_groups.get_unchecked(..end_rhs);
-        let a_positions = lhs_positions.get_unchecked(..end_lhs);
-        let b_positions = rhs_positions.get_unchecked(..end_rhs);
-        while lhs_i < a.len() && rhs_i < b.len() {
-            let lsb = word_wise_check(a, lhs_i, b, rhs_i, |v| v).to_bitmask();
-            if lsb >= 1 {
-                // this if is very likely to happend
-
-                let msb = word_wise_check(a, lhs_i, b, rhs_i, |v| (v & 0xFFFFFFFF00000000) >> 32)
-                    .to_bitmask();
-                // a0, a0, a0, a0 | a1, a1, a1, a1 | a2, a2, a2, a2 | a3, a3, a3, a3
-                // b0, b1, b2, b3 | b0, b1, b2, b3 | b0, b1, b2, b3 | b0, b1, b2, b3
-                let bitmask = lsb & msb;
-
-                let a0 = a.get_unchecked(lhs_i + 0);
-                let a0_pos = a_positions.get_unchecked(lhs_i + 0);
-                let a1 = a.get_unchecked(lhs_i + 1);
-                let a1_pos = a_positions.get_unchecked(lhs_i + 1);
-                let a2 = a.get_unchecked(lhs_i + 2);
-                let a2_pos = a_positions.get_unchecked(lhs_i + 2);
-                let a3 = a.get_unchecked(lhs_i + 3);
-                let a3_pos = a_positions.get_unchecked(lhs_i + 3);
-
-                let b3 = b.get_unchecked(rhs_i + 3);
-
-                if CMOV {
-                    let a0b0123 = ((bitmask & 0b0000_0000_0000_1111) > 0) as u8;
-                    let a1b0123 = ((bitmask & 0b0000_0000_1111_0000) > 0) as u8;
-                    let a2b0123 = ((bitmask & 0b0000_1111_0000_0000) > 0) as u8;
-                    let a3b0123 = ((bitmask & 0b1111_0000_0000_0000) > 0) as u8;
-
-                    cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a0, a0b0123);
-                    cmovnzu16(
-                        rhs_positions_result.get_unchecked_mut(i),
-                        get_b_pos::<0>(bitmask, b_positions, rhs_i),
-                        a0b0123,
-                    );
-                    if FIRST {
-                        cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a0_pos, a0b0123);
-                    }
-                    i += a0b0123 as usize;
-
-                    cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a1, a1b0123);
-                    cmovnzu16(
-                        rhs_positions_result.get_unchecked_mut(i),
-                        get_b_pos::<4>(bitmask, b_positions, rhs_i),
-                        a1b0123,
-                    );
-                    if FIRST {
-                        cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a1_pos, a1b0123);
-                    }
-                    i += a1b0123 as usize;
-
-                    cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a2, a2b0123);
-                    cmovnzu16(
-                        rhs_positions_result.get_unchecked_mut(i),
-                        get_b_pos::<8>(bitmask, b_positions, rhs_i),
-                        a2b0123,
-                    );
-                    if FIRST {
-                        cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a2_pos, a2b0123);
-                    }
-                    i += a2b0123 as usize;
-
-                    cmovnzu64(doc_id_groups_result.get_unchecked_mut(i), a3, a3b0123);
-                    cmovnzu16(
-                        rhs_positions_result.get_unchecked_mut(i),
-                        get_b_pos::<12>(bitmask, b_positions, rhs_i),
-                        a3b0123,
-                    );
-                    if FIRST {
-                        cmovnzu16(lhs_positions_result.get_unchecked_mut(i), a3_pos, a3b0123);
-                    }
-                    i += a3b0123 as usize;
-
-                    // branching in this case seems to be the fastest
-                    match a3.cmp(b3) {
-                        std::cmp::Ordering::Greater => rhs_i += 4,
-                        std::cmp::Ordering::Less => lhs_i += 4,
-                        std::cmp::Ordering::Equal => {
-                            lhs_i += 4;
-                            rhs_i += 4;
-                        }
-                    }
-                } else {
-                    let a0b0123 = (bitmask & 0b0000_0000_0000_1111) > 0;
-                    let a0b3 = (bitmask & 0b0000_0000_0000_1000) > 0;
-
-                    let a1b0123 = (bitmask & 0b0000_0000_1111_0000) > 0;
-                    let a1b3 = (bitmask & 0b0000_0000_1000_0000) > 0;
-
-                    let a2b0123 = (bitmask & 0b0000_1111_0000_0000) > 0;
-                    let a2b3 = (bitmask & 0b0000_1000_0000_0000) > 0;
-
-                    let a3b0123 = (bitmask & 0b1111_0000_0000_0000) > 0;
-                    let a3b3 = (bitmask & 0b1000_0000_0000_0000) > 0;
-
-                    if a0b0123 {
-                        doc_id_groups_result.get_unchecked_mut(i).write(*a0);
-                        rhs_positions_result
-                            .get_unchecked_mut(i)
-                            .write(*get_b_pos::<0>(bitmask, b_positions, rhs_i));
-                        if FIRST {
-                            lhs_positions_result.get_unchecked_mut(i).write(*a0_pos);
-                        }
-                        i += 1;
-                        if a0b3 {
-                            rhs_i += 4;
-                            continue;
-                        }
-                    }
-
-                    if a1b0123 {
-                        doc_id_groups_result.get_unchecked_mut(i).write(*a1);
-                        rhs_positions_result
-                            .get_unchecked_mut(i)
-                            .write(*get_b_pos::<4>(bitmask, b_positions, rhs_i));
-                        if FIRST {
-                            lhs_positions_result.get_unchecked_mut(i).write(*a1_pos);
-                        }
-                        i += 1;
-                        if a1b3 {
-                            rhs_i += 4;
-                            continue;
-                        }
-                    }
-
-                    if a2b0123 {
-                        doc_id_groups_result.get_unchecked_mut(i).write(*a2);
-                        rhs_positions_result
-                            .get_unchecked_mut(i)
-                            .write(*get_b_pos::<8>(bitmask, b_positions, rhs_i));
-                        if FIRST {
-                            lhs_positions_result.get_unchecked_mut(i).write(*a2_pos);
-                        }
-                        i += 1;
-                        if a2b3 {
-                            rhs_i += 4;
-                            continue;
-                        }
-                    }
-
-                    if a3b0123 {
-                        doc_id_groups_result.get_unchecked_mut(i).write(*a3);
-                        rhs_positions_result
-                            .get_unchecked_mut(i)
-                            .write(*get_b_pos::<12>(bitmask, b_positions, rhs_i));
-                        if FIRST {
-                            lhs_positions_result.get_unchecked_mut(i).write(*a3_pos);
-                        }
-                        i += 1;
-                        lhs_i += 4;
-                        if a3b3 {
-                            rhs_i += 4;
-                        }
-                        continue;
-                    }
-
-                    if a3 > b3 {
-                        rhs_i += 4;
-                    } else {
-                        lhs_i += 4;
-                    }
-                }
-            } else if *a.get_unchecked(lhs_i + 3) > *b.get_unchecked(rhs_i + 3) {
-                // we want to avoid this else if from running, since it's almost
-                // a 50-50%, making it hard to predict, for this reason we repeat
-                // this same check inside the
-                rhs_i += 4;
-            } else {
-                lhs_i += 4;
-            }
-        }
-
-        // for the remaining elements we can do a 2 pointer approach
-        // since the 2 slices will be small
-        while lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len() {
-            let lhs_doc_id_groups = unsafe { lhs_doc_id_groups.get_unchecked(lhs_i) };
-            let rhs_doc_id_groups = unsafe { rhs_doc_id_groups.get_unchecked(rhs_i) };
-            if lhs_doc_id_groups == rhs_doc_id_groups {
-                doc_id_groups_result
-                    .get_unchecked_mut(i)
-                    .write(*lhs_doc_id_groups);
-                if FIRST {
-                    let lhs = *lhs_positions.get_unchecked(lhs_i);
-                    lhs_positions_result.get_unchecked_mut(i).write(lhs);
-
-                    let rhs = *rhs_positions.get_unchecked(rhs_i);
-                    rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                } else {
-                    let rhs = *rhs_positions.get_unchecked(rhs_i);
-                    rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                }
-
-                i += 1;
-                lhs_i += 1;
-                rhs_i += 1;
-            } else if lhs_doc_id_groups > rhs_doc_id_groups {
-                rhs_i += 1;
-            } else {
-                lhs_i += 1;
-            }
-        }
-
-        let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
-        let lhs_positions_result_ptr = Box::into_raw(lhs_positions_result) as *mut _;
-        let rhs_positions_result_ptr = Box::into_raw(rhs_positions_result) as *mut _;
-        unsafe {
-            (
-                Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
-                if FIRST {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, i, min)
-                } else {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
-                },
-                Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
-            )
-        }
-    }
-
-    fn naive_intersect<const FIRST: bool>(&self, rhs: &Self) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
-        let lhs_positions = self.positions;
-        let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = self.doc_id_groups;
-        let rhs_doc_id_groups = rhs.doc_id_groups;
-
-        let mut lhs_i = 0;
-        let mut rhs_i = 0;
-
-        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len());
-        let mut i = 0;
-        let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
-        let mut lhs_positions_result: Box<[MaybeUninit<u16>]> = if FIRST {
-            Box::new_uninit_slice(min)
-        } else {
-            Box::new_uninit_slice(0)
-        };
-        let mut rhs_positions_result: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(min);
-
-        while lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len() {
-            let lhs_doc_id_groups = unsafe { lhs_doc_id_groups.get_unchecked(lhs_i) };
-            let rhs_doc_id_groups = unsafe { rhs_doc_id_groups.get_unchecked(rhs_i) };
-            if lhs_doc_id_groups == rhs_doc_id_groups {
-                unsafe {
-                    doc_id_groups_result
-                        .get_unchecked_mut(i)
-                        .write(*lhs_doc_id_groups);
-                    let rhs = *rhs_positions.get_unchecked(rhs_i);
-                    rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                    if FIRST {
-                        let lhs = *lhs_positions.get_unchecked(lhs_i);
-                        lhs_positions_result.get_unchecked_mut(i).write(lhs);
-                    }
-                }
-
-                i += 1;
-                lhs_i += 1;
-                rhs_i += 1;
-            } else if lhs_doc_id_groups > rhs_doc_id_groups {
-                rhs_i += 1;
-            } else {
-                lhs_i += 1;
-            }
-        }
-
-        let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
-        let lhs_positions_result_ptr = Box::into_raw(lhs_positions_result) as *mut _;
-        let rhs_positions_result_ptr = Box::into_raw(rhs_positions_result) as *mut _;
-        unsafe {
-            (
-                Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
-                if FIRST {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, i, min)
-                } else {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
-                },
-                Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
-            )
-        }
-    }
-
-    fn gallop_intersect<const FIRST: bool>(&self, rhs: &Self) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
-        let lhs_positions = self.positions;
-        let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = self.doc_id_groups;
-        let rhs_doc_id_groups = rhs.doc_id_groups;
-
-        let mut lhs_i = 0;
-        let mut rhs_i = 0;
-
-        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len());
-        let mut i = 0;
-        let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
-        let mut lhs_positions_result: Box<[MaybeUninit<u16>]> = if FIRST {
-            Box::new_uninit_slice(min)
-        } else {
-            Box::new_uninit_slice(0)
-        };
-        let mut rhs_positions_result: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(min);
-
-        while lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len() {
-            let mut lhs_delta = 1;
-            let mut rhs_delta = 1;
-
-            while lhs_i < lhs_doc_id_groups.len()
-                && lhs_doc_id_groups[lhs_i] < rhs_doc_id_groups[rhs_i]
-            {
-                lhs_i += lhs_delta;
-                lhs_delta *= 2;
-            }
-            lhs_i -= lhs_delta / 2;
-
-            while rhs_i < rhs_doc_id_groups.len()
-                && rhs_doc_id_groups[rhs_i] < unsafe { *lhs_doc_id_groups.get_unchecked(lhs_i) }
-            {
-                rhs_i += rhs_delta;
-                rhs_delta *= 2;
-            }
-            rhs_i -= rhs_delta / 2;
-
-            let lhs_doc_id_groups = unsafe { lhs_doc_id_groups.get_unchecked(lhs_i) };
-            let rhs_doc_id_groups = unsafe { rhs_doc_id_groups.get_unchecked(rhs_i) };
-            match lhs_doc_id_groups.cmp(rhs_doc_id_groups) {
-                std::cmp::Ordering::Less => lhs_i += 1,
-                std::cmp::Ordering::Greater => rhs_i += 1,
-                std::cmp::Ordering::Equal => unsafe {
-                    doc_id_groups_result
-                        .get_unchecked_mut(i)
-                        .write(*lhs_doc_id_groups);
-                    if FIRST {
-                        let lhs = *lhs_positions.get_unchecked(lhs_i);
-                        lhs_positions_result.get_unchecked_mut(i).write(lhs);
-
-                        let rhs = *rhs_positions.get_unchecked(rhs_i);
-                        rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                    } else {
-                        let rhs = *rhs_positions.get_unchecked(rhs_i);
-                        rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                    }
-
-                    i += 1;
-                    lhs_i += 1;
-                    rhs_i += 1;
-                },
-            }
-        }
-
-        let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
-        let lhs_positions_result_ptr = Box::into_raw(lhs_positions_result) as *mut _;
-        let rhs_positions_result_ptr = Box::into_raw(rhs_positions_result) as *mut _;
-        unsafe {
-            (
-                Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
-                if FIRST {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, i, min)
-                } else {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
-                },
-                Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
-            )
-        }
-    }
-
-    fn unrolled_naive_intersect<const FIRST: bool>(
-        &self,
-        rhs: &Self,
-    ) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
-        let lhs_positions = self.positions;
-        let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = self.doc_id_groups;
-        let rhs_doc_id_groups = rhs.doc_id_groups;
-
-        let mut lhs_i = 0;
-        let mut rhs_i = 0;
-
-        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len());
-        let mut i = 0;
-        let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
-        let mut lhs_positions_result: Box<[MaybeUninit<u16>]> = if FIRST {
-            Box::new_uninit_slice(min)
-        } else {
-            Box::new_uninit_slice(0)
-        };
-        let mut rhs_positions_result: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(min);
-
-        unsafe {
-            loop {
-                let lhs_bound = lhs_doc_id_groups.len() - lhs_i;
-                let rhs_bound = rhs_doc_id_groups.len() - rhs_i;
-                let iters = lhs_bound.min(rhs_bound);
-                if iters == 0 {
-                    break;
-                }
-
-                for _ in 0..iters {
-                    let lhs_doc_id_groups = *lhs_doc_id_groups.get_unchecked(lhs_i);
-                    let rhs_doc_id_groups = *rhs_doc_id_groups.get_unchecked(rhs_i);
-
-                    let rhs = *rhs_positions.get_unchecked(rhs_i);
-                    doc_id_groups_result
-                        .get_unchecked_mut(i)
-                        .write(lhs_doc_id_groups);
-                    rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                    if FIRST {
-                        let lhs = *lhs_positions.get_unchecked(lhs_i);
-                        lhs_positions_result.get_unchecked_mut(i).write(lhs);
-                    }
-                    i += (lhs_doc_id_groups == rhs_doc_id_groups) as usize;
-                    lhs_i += (lhs_doc_id_groups <= rhs_doc_id_groups) as usize;
-                    rhs_i += (rhs_doc_id_groups <= lhs_doc_id_groups) as usize;
-                }
-            }
-        }
-
-        let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
-        let lhs_positions_result_ptr = Box::into_raw(lhs_positions_result) as *mut _;
-        let rhs_positions_result_ptr = Box::into_raw(rhs_positions_result) as *mut _;
-        unsafe {
-            (
-                Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
-                if FIRST {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, i, min)
-                } else {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
-                },
-                Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
-            )
-        }
-    }
-
-    unsafe fn vp2intersectq_intersect<const FIRST: bool>(&self, rhs: &Self) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
-        let lhs_positions = self.positions;
-        let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = self.doc_id_groups;
-        let rhs_doc_id_groups = rhs.doc_id_groups;
-
-        let mut lhs_i = 0;
-        let mut rhs_i = 0;
-
-        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len());
-        let mut i = 0;
-        let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
-        let mut lhs_positions_result: Box<[MaybeUninit<u16>]> = if FIRST {
-            Box::new_uninit_slice(min)
-        } else {
-            Box::new_uninit_slice(0)
-        };
-        let mut rhs_positions_result: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(min);
-
-        #[cfg(target_feature = "avx512f")]
-        const N: usize = 8;
-        #[cfg(not(target_feature = "avx512f"))]
-        const N: usize = 4;
-
-        let end_lhs = lhs_doc_id_groups.len() / N * N;
-        let end_rhs = rhs_doc_id_groups.len() / N * N;
-        let a = lhs_doc_id_groups.get_unchecked(..end_lhs);
-        let b = rhs_doc_id_groups.get_unchecked(..end_rhs);
-        let a_positions = lhs_positions.get_unchecked(..end_lhs);
-        let b_positions = rhs_positions.get_unchecked(..end_rhs);
-        unsafe {
-            assume(a.len() % N == 0);
-            assume(b.len() % N == 0);
-            assume(a_positions.len() % N == 0);
-            assume(b_positions.len() % N == 0);
-        }
-
-        while lhs_i < a.len() && rhs_i < b.len() {
-            #[cfg(target_feature = "avx512f")]
-            let (va, vb) = {
-                use std::arch::x86_64::_mm512_loadu_epi64;
-                let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
-                let vb = _mm512_loadu_epi64(b.as_ptr().add(rhs_i) as *const _);
-                (va, vb)
-            };
-
-            #[cfg(not(target_feature = "avx512f"))]
-            let (va, vb) = {
-                use std::arch::x86_64::_mm256_loadu_si256;
-                let va = _mm256_loadu_si256(a.as_ptr().add(lhs_i) as *const _);
-                let vb = _mm256_loadu_si256(b.as_ptr().add(rhs_i) as *const _);
-                (va, vb)
-            };
-
-            let (mask_a, mask_b) = vp2intersectq(va, vb);
-
-            #[cfg(target_feature = "avx512f")]
-            {
-                use std::arch::x86_64::{_mm512_mask_compressstoreu_epi64, _mm512_mask_compressstoreu_epi16, _mm512_loadu_epi16};
-                _mm512_mask_compressstoreu_epi64(doc_id_groups_result.as_mut_ptr().add(i) as *mut _, mask_a, va);
-
-                let vb_positions = _mm512_loadu_epi16(b_positions.as_ptr().add(rhs_i) as *const _);
-                _mm512_mask_compressstoreu_epi16(rhs_positions_result.as_mut_ptr().add(i) as *mut _, mask_b as u32, vb_positions);
-
-                if FIRST {
-                    let va_positions = _mm512_loadu_epi16(a_positions.as_ptr().add(lhs_i) as *const _);
-                    _mm512_mask_compressstoreu_epi16(lhs_positions_result.as_mut_ptr().add(i) as *mut _, mask_a as u32, va_positions);
-                }
-
-                i += mask_a.count_ones() as usize;
-            }
-
-            #[cfg(not(target_feature = "avx512f"))]
-            {
-                let mut c = 0;
-                for (j, r) in mask_a.as_array().iter().enumerate() {
-                    let doc_id_groups = a.get_unchecked(lhs_i + j);
-                    doc_id_groups_result.get_unchecked_mut(i + c).write(*doc_id_groups);
-                    if FIRST {
-                        let positions = a_positions.get_unchecked(lhs_i + j);
-                        lhs_positions_result.get_unchecked_mut(i + c).write(*positions);
-                    }
-                    c += (*r == u64::MAX) as usize;
-                }
-
-                for (j, r) in mask_b.as_array().iter().enumerate() {
-                    let positions = b_positions.get_unchecked(rhs_i + j);
-                    rhs_positions_result.get_unchecked_mut(i).write(*positions);
-                    i += (*r == u64::MAX) as usize;
-                }
-            }
-
-            let last_a = *a.as_ptr().add(lhs_i + N);
-            let last_b = *b.as_ptr().add(rhs_i + N);
-
-            let va: Simd<u64, N> = va.into();
-            let vb: Simd<u64, N> = vb.into();
-
-            let last_va = Simd::splat(last_a);
-            let last_vb = Simd::splat(last_b);
-
-            lhs_i += 64 - va.simd_le(last_vb).to_bitmask().leading_zeros() as usize;
-            rhs_i += 64 - vb.simd_le(last_va).to_bitmask().leading_zeros() as usize;
-        }
-
-        // for the remaining elements we can do a 2 pointer approach
-        // since the 2 slices will be small
-        while lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len() {
-            let lhs_doc_id_groups = unsafe { lhs_doc_id_groups.get_unchecked(lhs_i) };
-            let rhs_doc_id_groups = unsafe { rhs_doc_id_groups.get_unchecked(rhs_i) };
-            if lhs_doc_id_groups == rhs_doc_id_groups {
-                doc_id_groups_result
-                    .get_unchecked_mut(i)
-                    .write(*lhs_doc_id_groups);
-                if FIRST {
-                    let lhs = *lhs_positions.get_unchecked(lhs_i);
-                    lhs_positions_result.get_unchecked_mut(i).write(lhs);
-
-                    let rhs = *rhs_positions.get_unchecked(rhs_i);
-                    rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                } else {
-                    let rhs = *rhs_positions.get_unchecked(rhs_i);
-                    rhs_positions_result.get_unchecked_mut(i).write(rhs);
-                }
-
-                i += 1;
-                lhs_i += 1;
-                rhs_i += 1;
-            } else if lhs_doc_id_groups > rhs_doc_id_groups {
-                rhs_i += 1;
-            } else {
-                lhs_i += 1;
-            }
-        }
-
-        let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
-        let lhs_positions_result_ptr = Box::into_raw(lhs_positions_result) as *mut _;
-        let rhs_positions_result_ptr = Box::into_raw(rhs_positions_result) as *mut _;
-        unsafe {
-            (
-                Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
-                if FIRST {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, i, min)
-                } else {
-                    Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
-                },
-                Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
-            )
         }
     }
 }
@@ -989,32 +244,11 @@ impl RoaringishPacked {
         }
     }
 
-    pub fn intersect(&self, rhs: &Self, rhs_len: u32, stats: &Stats) -> Self {
+    pub fn intersect<I: Intersect>(&self, rhs: &Self, rhs_len: u32, stats: &Stats) -> Self {
         let lhs = BorrowRoaringishPacked::new(self);
         let rhs = BorrowRoaringishPacked::new(rhs);
         let b = std::time::Instant::now();
-        // let (doc_id_groups, lhs_positions, rhs_positions) = lhs.naive_intersect::<true>(&rhs);
-        let (doc_id_groups, lhs_positions, rhs_positions) =
-            lhs.unrolled_naive_intersect::<true>(&rhs);
-        // let (doc_id_groups, lhs_positions, rhs_positions) = lhs.gallop_intersect::<true>(&rhs);
-        // let (doc_id_groups, lhs_positions, rhs_positions) = unsafe { lhs.simd_intersect::<true, false>(&rhs) };
-
-        assert_eq!(
-            lhs.unrolled_naive_intersect::<true>(&rhs),
-            lhs.naive_intersect::<true>(&rhs)
-        );
-        assert_eq!(
-            lhs.gallop_intersect::<true>(&rhs),
-            lhs.naive_intersect::<true>(&rhs)
-        );
-        assert_eq!(
-            unsafe { lhs.simd_intersect::<true, true>(&rhs) },
-            lhs.naive_intersect::<true>(&rhs)
-        );
-        assert_eq!(
-            unsafe { lhs.simd_intersect::<true, false>(&rhs) },
-            lhs.naive_intersect::<true>(&rhs)
-        );
+        let (doc_id_groups, lhs_positions, rhs_positions) = I::intersect::<true>(&lhs, &rhs);
 
         stats
             .first_gallop
@@ -1034,28 +268,7 @@ impl RoaringishPacked {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &msb_positions);
         let b = std::time::Instant::now();
-        // let (msb_doc_id_groups, _, msb_rhs_positions) = msb_packed.naive_intersect::<false>(&rhs);
-        let (msb_doc_id_groups, _, msb_rhs_positions) =
-            msb_packed.unrolled_naive_intersect::<false>(&rhs);
-        // let (msb_doc_id_groups, _, msb_rhs_positions) = msb_packed.gallop_intersect::<false>(&rhs);
-        // let (msb_doc_id_groups, _, msb_rhs_positions) = unsafe { msb_packed.simd_intersect::<false, false>(&rhs) };
-
-        assert_eq!(
-            msb_packed.unrolled_naive_intersect::<false>(&rhs),
-            msb_packed.naive_intersect::<false>(&rhs)
-        );
-        assert_eq!(
-            msb_packed.gallop_intersect::<false>(&rhs),
-            msb_packed.naive_intersect::<false>(&rhs)
-        );
-        assert_eq!(
-            unsafe { msb_packed.simd_intersect::<false, true>(&rhs) },
-            msb_packed.naive_intersect::<false>(&rhs)
-        );
-        assert_eq!(
-            unsafe { msb_packed.simd_intersect::<false, false>(&rhs) },
-            msb_packed.naive_intersect::<false>(&rhs)
-        );
+        let (msb_doc_id_groups, _, msb_rhs_positions) = I::intersect::<false>(&msb_packed, &rhs);
 
         stats
             .second_gallop
@@ -1383,6 +596,25 @@ impl Display for RoaringishPacked {
             })
             .flatten();
         f.debug_list().entries(it).finish()
+    }
+}
+
+impl<'a> Arbitrary<'a> for RoaringishPacked {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let len = u.arbitrary_len::<(u64, u16)>()?;
+        let doc_id_groups: Result<Vec<u64>, _> = u.arbitrary_iter()?.take(len).collect();
+        let mut doc_id_groups = doc_id_groups?;
+        doc_id_groups.sort_unstable();
+        doc_id_groups.dedup();
+
+        let positions: Result<Vec<u16>, _> =
+            u.arbitrary_iter()?.take(doc_id_groups.len()).collect();
+        let positions = positions?;
+
+        Ok(Self {
+            doc_id_groups: doc_id_groups.into_boxed_slice(),
+            positions: positions.into_boxed_slice(),
+        })
     }
 }
 

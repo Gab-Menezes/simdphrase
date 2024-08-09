@@ -6,7 +6,7 @@ use std::{
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rkyv::{ser::DefaultSerializer, util::AlignedVec, Archive, Deserialize, Serialize};
 
-use crate::{Stats, DB};
+use crate::{roaringish::intersect::Intersect, Stats, DB};
 
 pub struct Searcher<D>
 where
@@ -35,10 +35,10 @@ where
         Some(Self { shards })
     }
 
-    pub fn search(&self, q: &str, stats: &Stats) -> Vec<u32> {
+    pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
         self.shards
             .iter()
-            .map(|shard| shard.search(q, stats))
+            .map(|shard| shard.search::<I>(q, stats))
             .flatten()
             .collect()
     }
@@ -68,10 +68,10 @@ where
         + Sync
         + 'static,
 {
-    pub fn par_search(&self, q: &str, stats: &Stats) -> Vec<u32> {
+    pub fn par_search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
         self.shards
             .par_iter()
-            .map(|shard| shard.search(q, stats))
+            .map(|shard| shard.search::<I>(q, stats))
             .flatten()
             .collect()
     }

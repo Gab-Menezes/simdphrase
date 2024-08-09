@@ -28,7 +28,7 @@ use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
     pl::{ArchivedPostingList, PostingList},
-    roaringish::RoaringishPacked,
+    roaringish::{intersect::Intersect, RoaringishPacked},
     tokenize,
     utils::MAX_SEQ_LEN,
 };
@@ -457,7 +457,7 @@ where
         }
     }
 
-    pub fn search(&self, q: &str, stats: &Stats) -> Vec<u32> {
+    pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
         let b = std::time::Instant::now();
         let q = normalize(q);
         let tokens: Vec<_> = tokenize(&q).collect();
@@ -516,15 +516,15 @@ where
             stats
             .add_lhs
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-            lhs.intersect(rhs, *rhs_len, stats)
+            lhs.intersect::<I>(rhs, *rhs_len, stats)
         } else {
-            lhs.intersect(rhs, *rhs_len, stats)
+            lhs.intersect::<I>(rhs, *rhs_len, stats)
         };
 
         for (t, t_len) in it {
             let rhs = token_to_token_id.get(t).unwrap();
             let rhs = token_id_to_packed.get(rhs).unwrap();
-            lhs = lhs.intersect(rhs, *t_len, stats);
+            lhs = lhs.intersect::<I>(rhs, *t_len, stats);
         }
         lhs.get_doc_ids()
     }

@@ -8,7 +8,7 @@ use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{normalize, tokenize, CommonTokens, Indexer, Searcher, Stats};
+use phrase_search::{naive::NaiveIntersect, normalize, tokenize, CommonTokens, Indexer, Searcher, Stats};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
@@ -117,7 +117,7 @@ where
 
             let b = std::time::Instant::now();
 
-            let doc_ids = searcher.search(q, &stats);
+            let doc_ids = searcher.search::<NaiveIntersect>(q, &stats);
             // let doc_ids = searcher.par_search(q, &stats);
             // let doc_ids = shard.search(q, &stats);
 
