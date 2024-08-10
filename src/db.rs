@@ -51,12 +51,9 @@ pub struct Stats {
 
 impl Debug for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    
-
         let sum = 
             self.normalize_tokenize.load(Relaxed) +
             self.merge.load(Relaxed) +
-            // self.get_pls.load(Relaxed) +
             self.first_gallop.load(Relaxed) +
             self.add_one_group.load(Relaxed) +
             self.second_gallop.load(Relaxed) +
@@ -67,31 +64,47 @@ impl Debug for Stats {
             self.add_lhs.load(Relaxed) +
             self.add_rhs.load(Relaxed);
 
-            let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64;
-            let merge = self.merge.load(Relaxed) as f64 / sum as f64;
-            // let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
-            let first_gallop = self.first_gallop.load(Relaxed) as f64 / sum as f64;
-            let add_one_group = self.add_one_group.load(Relaxed) as f64 / sum as f64;
-            let second_gallop = self.second_gallop.load(Relaxed) as f64 / sum as f64;
-            let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64;
-            let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64;
-            let first_result = self.first_result.load(Relaxed) as f64 / sum as f64;
-            let second_result = self.second_result.load(Relaxed) as f64 / sum as f64;
-            let add_lhs = self.add_lhs.load(Relaxed) as f64 / sum as f64;
-            let add_rhs = self.add_rhs.load(Relaxed) as f64 / sum as f64;
+        let sum_pl = sum + self.get_pls.load(Relaxed);
+
+        let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64;
+        let merge = self.merge.load(Relaxed) as f64 / sum as f64;
+        // let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
+        let first_gallop = self.first_gallop.load(Relaxed) as f64 / sum as f64;
+        let add_one_group = self.add_one_group.load(Relaxed) as f64 / sum as f64;
+        let second_gallop = self.second_gallop.load(Relaxed) as f64 / sum as f64;
+        let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64;
+        let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64;
+        let first_result = self.first_result.load(Relaxed) as f64 / sum as f64;
+        let second_result = self.second_result.load(Relaxed) as f64 / sum as f64;
+        let add_lhs = self.add_lhs.load(Relaxed) as f64 / sum as f64;
+        let add_rhs = self.add_rhs.load(Relaxed) as f64 / sum as f64;
+
+        let pl_normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_merge = self.merge.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_get_pls = self.get_pls.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_first_gallop = self.first_gallop.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_add_one_group = self.add_one_group.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_second_gallop = self.second_gallop.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_first_intersect = self.first_intersect.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_second_intersect = self.second_intersect.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_first_result = self.first_result.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_second_result = self.second_result.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_add_lhs = self.add_lhs.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_add_rhs = self.add_rhs.load(Relaxed) as f64 / sum_pl as f64;
+
         f.debug_struct("Stats")
-            .field("normalize_tokenize", &normalize_tokenize)
-            .field("merge", &merge)
-            // .field("get_pls", &get_pls)
-            .field("first_gallop", &first_gallop)
-            .field("add_one_group", &add_one_group)
-            .field("second_gallop", &second_gallop)
-            .field("first_intersect", &first_intersect)
-            .field("second_intersect", &second_intersect)
-            .field("first_result", &first_result)
-            .field("second_result", &second_result)
-            .field("add_lhs", &add_lhs)
-            .field("add_rhs", &add_rhs)
+            .field("normalize_tokenize", &format_args!("({}, {normalize_tokenize:.3}%, {pl_normalize_tokenize:.3}%)", self.normalize_tokenize.load(Relaxed)))
+            .field("merge", &format_args!("({}, {merge:.3}%, {pl_merge:.3}%)", self.merge.load(Relaxed)))
+            .field("get_pls", &format_args!("({}, _%, {pl_get_pls:.3}%)", self.get_pls.load(Relaxed)))
+            .field("first_gallop", &format_args!("({}, {first_gallop:.3}%, {pl_first_gallop:.3}%)", self.first_gallop.load(Relaxed)))
+            .field("add_one_group", &format_args!("({}, {add_one_group:.3}%, {pl_add_one_group:.3}%)", self.add_one_group.load(Relaxed)))
+            .field("second_gallop", &format_args!("({}, {second_gallop:.3}%, {pl_second_gallop:.3}%)", self.second_gallop.load(Relaxed)))
+            .field("first_intersect", &format_args!("({}, {first_intersect:.3}%, {pl_first_intersect:.3}%)", self.first_intersect.load(Relaxed)))
+            .field("second_intersect", &format_args!("({}, {second_intersect:.3}%, {pl_second_intersect:.3}%)", self.second_intersect.load(Relaxed)))
+            .field("first_result", &format_args!("({}, {first_result:.3}%, {pl_first_result:.3}%)", self.first_result.load(Relaxed)))
+            .field("second_result", &format_args!("({}, {second_result:.3}%, {pl_second_result:.3}%)", self.second_result.load(Relaxed)))
+            .field("add_lhs", &format_args!("({}, {add_lhs:.3}%, {pl_add_lhs:.3}%)", self.add_lhs.load(Relaxed)))
+            .field("add_rhs", &format_args!("({}, {add_rhs:.3}%, {pl_add_rhs:.3}%)", self.add_rhs.load(Relaxed)))
             .finish()
     }
     // fn fmt(&self, f: &mut $crate::fmt::Formatter) -> $crate::fmt::Result {
