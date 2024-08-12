@@ -14,7 +14,6 @@ use std::{
     sync::atomic::Ordering::Relaxed,
 };
 
-use crate::pl::CachePostingList;
 use crate::{
     pl::{ArchivedPostingList, PostingList},
     Stats,
@@ -442,15 +441,6 @@ impl Add<u32> for &RoaringishPacked {
                 positions: Vec::from_raw_parts(Box::into_raw(positions) as *mut _, i, n)
                     .into_boxed_slice(),
             }
-        }
-    }
-}
-
-impl<'a, 'b> From<CachePostingList<'a, 'b>> for RoaringishPacked {
-    fn from(value: CachePostingList<'a, 'b>) -> Self {
-        match value {
-            CachePostingList::Cached(pl) => pl.into(),
-            CachePostingList::NotCached(pl) => pl.into(),
         }
     }
 }
