@@ -8,7 +8,7 @@ use std::{
     simd::{cmp::SimdPartialOrd, Simd},
 };
 
-use crate::roaringish::BorrowRoaringishPacked;
+use crate::roaringish::{BorrowRoaringishPacked, Packed};
 
 use super::{private::IntersectSeal, Intersect};
 
@@ -70,7 +70,7 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     return (mask0, mask1);
 }
 
-#[cfg(all(not(target_feature = "avx512f")))]
+#[cfg(not(target_feature = "avx512f"))]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (Simd<u64, 4>, Simd<u64, 4>) {
     use std::arch::x86_64::{
@@ -99,14 +99,13 @@ unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (Simd<u64, 4>, Simd<u64, 4>) 
     (mask0.into(), mask1.into())
 }
 
-#[cfg(target_feature = "avx512f")]
+#[cfg(all(target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
 #[inline(always)]
-unsafe fn avx512_analyze_msb(va: __m512i, a_positions: &[u16], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) 
+unsafe fn avx512_analyze_msb<L: Packed>(va: __m512i, a_positions: &[L::Position], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) 
 {
-    use std::arch::x86_64::_mm512_mask_compressstoreu_epi64;
+    use std::arch::x86_64::{_mm512_mask_compressstoreu_epi64, _mm_loadu_epi16};
 
-    let positions = unsafe { a_positions.get_unchecked(lhs_i..(lhs_i + 8)) };
-    let vpositions: Simd<u16, 8> = Simd::from_slice(positions);
+    let vpositions: Simd<u16, 8> = unsafe { _mm_loadu_epi16(a_positions.as_ptr().add(lhs_i) as *const _).into() };
     let vmsb_set = (vpositions & Simd::splat(0x8000)).simd_gt(Simd::splat(0));
 
     let mask = vmsb_set.to_bitmask() as u8;
@@ -123,17 +122,13 @@ unsafe fn avx512_analyze_msb(va: __m512i, a_positions: &[u16], lhs_i: usize, msb
 }
 
 #[inline(always)]
-unsafe fn simple_analyze_msb<const N: usize>(a: &[u64], a_positions: &[u16], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) 
-where
-    LaneCount<N>: SupportedLaneCount,
-{
+unsafe fn simple_analyze_msb<const N: usize, L: Packed>(a: &[L::DocIdGroup], a_positions: &[L::Position], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) {
     let positions = unsafe { a_positions.get_unchecked(lhs_i..(lhs_i + N)) };
-    let vpositions: Simd<u16, N> = Simd::from_slice(positions);
-    let vmsb_set = (vpositions & Simd::splat(0x8000)).simd_gt(Simd::splat(0));
 
-    for (k, set) in vmsb_set.to_array().into_iter().enumerate() {
-        let doc_id_groups = unsafe { a.get_unchecked(lhs_i + k) };
+    for (k, pos) in positions.into_iter().enumerate() {
+        let doc_id_groups = unsafe { (*a.get_unchecked(lhs_i + k)).into() };
         unsafe { msb_doc_id_groups_result.get_unchecked_mut(*j).write(doc_id_groups + 1) };
+        let set = ((*pos).into() & 0x8000) > 0;
         *j += set as usize;
     }
 }
@@ -142,9 +137,9 @@ pub struct SimdIntersect;
 impl IntersectSeal for SimdIntersect {}
 
 impl Intersect for SimdIntersect {
-    fn intersect<const FIRST: bool>(
-        lhs: &BorrowRoaringishPacked,
-        rhs: &BorrowRoaringishPacked,
+    fn intersect<const FIRST: bool, L: Packed, R: Packed>(
+        lhs: &BorrowRoaringishPacked<L>,
+        rhs: &BorrowRoaringishPacked<R>,
     ) -> (Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>) {
         let lhs_positions = lhs.positions;
         let rhs_positions = rhs.positions;
@@ -212,10 +207,14 @@ impl Intersect for SimdIntersect {
             let (mask_a, mask_b) = unsafe { vp2intersectq(va, vb) };
 
             // --------------------- STORE ---------------------
-            #[cfg(target_feature = "avx512f")]
+            #[cfg(all(
+                target_feature = "avx512f",
+                target_feature = "avx512bw",
+                target_feature = "avx512vl",
+                target_feature = "avx512vbmi2",
+            ))]
             unsafe {
                 use std::arch::x86_64::{
-                    _mm512_loadu_epi16, _mm512_mask_compressstoreu_epi16,
                     _mm512_mask_compressstoreu_epi64, _mm_loadu_epi16, _mm_mask_compressstoreu_epi16
                 };
                 _mm512_mask_compressstoreu_epi64(
@@ -244,7 +243,12 @@ impl Intersect for SimdIntersect {
                 i += mask_a.count_ones() as usize;
             }
 
-            #[cfg(not(target_feature = "avx512f"))]
+            #[cfg(not(all(
+                target_feature = "avx512f",
+                target_feature = "avx512bw",
+                target_feature = "avx512vl",
+                target_feature = "avx512vbmi2",
+            )))]
             {
                 let mut c = 0;
                 for (j, r) in mask_a.as_array().iter().enumerate() {
@@ -252,14 +256,14 @@ impl Intersect for SimdIntersect {
                         let doc_id_groups = a.get_unchecked(lhs_i + j);
                         doc_id_groups_result
                             .get_unchecked_mut(i + c)
-                            .write(*doc_id_groups)
+                            .write((*doc_id_groups).into())
                     };
                     if FIRST {
                         unsafe {
                             let positions = a_positions.get_unchecked(lhs_i + j);
                             lhs_positions_result
                                 .get_unchecked_mut(i + c)
-                                .write(*positions)
+                                .write((*positions).into())
                         };
                     }
                     c += (*r == u64::MAX) as usize;
@@ -267,14 +271,14 @@ impl Intersect for SimdIntersect {
 
                 for (j, r) in mask_b.as_array().iter().enumerate() {
                     let positions = unsafe { b_positions.get_unchecked(rhs_i + j) };
-                    unsafe { rhs_positions_result.get_unchecked_mut(i).write(*positions) };
+                    unsafe { rhs_positions_result.get_unchecked_mut(i).write((*positions).into()) };
                     i += (*r == u64::MAX) as usize;
                 }
             }
             // -----------------------------------------------
 
-            let last_a = unsafe { *a.as_ptr().add(lhs_i + N - 1) };
-            let last_b = unsafe { *b.as_ptr().add(rhs_i + N - 1) };
+            let last_a = unsafe { (*a.get_unchecked(lhs_i + N - 1)).into() };
+            let last_b = unsafe { (*b.get_unchecked(rhs_i + N - 1)).into() };
 
             if FIRST {
                 if last_a <= last_b {
@@ -283,7 +287,7 @@ impl Intersect for SimdIntersect {
                         avx512_analyze_msb(va, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
 
                         #[cfg(not(target_feature = "avx512f"))]
-                        simple_analyze_msb::<N>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
+                        simple_analyze_msb::<N, L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
                     }
                     lhs_i += N;
                 }
@@ -305,7 +309,7 @@ impl Intersect for SimdIntersect {
 
                 #[cfg(not(target_feature = "avx512f"))]
                 unsafe {
-                    simple_analyze_msb::<N>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) 
+                    simple_analyze_msb::<N, L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) 
                 };
             }
         }
@@ -313,17 +317,17 @@ impl Intersect for SimdIntersect {
         // for the remaining elements we can do a 2 pointer approach
         // since the 2 slices will be small
         while lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len() {
-            let lhs_doc_id_groups = unsafe { lhs_doc_id_groups.get_unchecked(lhs_i) };
-            let rhs_doc_id_groups = unsafe { rhs_doc_id_groups.get_unchecked(rhs_i) };
+            let lhs_doc_id_groups = unsafe { (*lhs_doc_id_groups.get_unchecked(lhs_i)).into() };
+            let rhs_doc_id_groups = unsafe { (*rhs_doc_id_groups.get_unchecked(rhs_i)).into() };
             if lhs_doc_id_groups == rhs_doc_id_groups {
                 unsafe {
                     doc_id_groups_result
                         .get_unchecked_mut(i)
-                        .write(*lhs_doc_id_groups);
-                    let rhs = *rhs_positions.get_unchecked(rhs_i);
+                        .write(lhs_doc_id_groups);
+                    let rhs = (*rhs_positions.get_unchecked(rhs_i)).into();
                     rhs_positions_result.get_unchecked_mut(i).write(rhs);
                     if FIRST {
-                        let lhs = *lhs_positions.get_unchecked(lhs_i);
+                        let lhs = (*lhs_positions.get_unchecked(lhs_i)).into();
                         lhs_positions_result.get_unchecked_mut(i).write(lhs);
                         msb_doc_id_groups_result.get_unchecked_mut(j).write(lhs_doc_id_groups + 1);
                         j += (lhs & 0x8000 > 1) as usize;
@@ -338,7 +342,7 @@ impl Intersect for SimdIntersect {
             } else {
                 if FIRST {
                     unsafe {
-                        let lhs = *lhs_positions.get_unchecked(lhs_i);
+                        let lhs = (*lhs_positions.get_unchecked(lhs_i)).into();
                         msb_doc_id_groups_result.get_unchecked_mut(j).write(lhs_doc_id_groups + 1);
                         j += (lhs & 0x8000 > 1) as usize;
                     }

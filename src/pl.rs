@@ -1,9 +1,6 @@
-use rkyv::{Archive, Deserialize, Serialize};
-
 use crate::roaringish::Roaringish;
 
-#[derive(Debug, Default, Serialize, Deserialize, Archive)]
-#[archive_attr(derive(Debug))]
+#[derive(Debug, Default)]
 pub struct PostingList {
     pub(crate) doc_ids: Vec<u32>,
     pub(crate) positions: Vec<Roaringish>,

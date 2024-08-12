@@ -27,8 +27,8 @@ use roaring::RoaringBitmap;
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    pl::{ArchivedPostingList, PostingList},
-    roaringish::{intersect::Intersect, RoaringishPacked},
+    pl::PostingList,
+    roaringish::{intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, Packed},
     tokenize,
     utils::MAX_SEQ_LEN,
 };
@@ -38,7 +38,6 @@ pub struct Stats {
     pub normalize_tokenize: AtomicU64,
     pub merge: AtomicU64,
     pub get_pls: AtomicU64,
-    pub build_pack: AtomicU64,
     pub first_gallop: AtomicU64,
     pub add_one_group: AtomicU64,
     pub second_gallop: AtomicU64,
@@ -55,7 +54,6 @@ impl Debug for Stats {
         let sum = 
             self.normalize_tokenize.load(Relaxed) +
             self.merge.load(Relaxed) +
-            self.build_pack.load(Relaxed) +
             self.first_gallop.load(Relaxed) +
             self.add_one_group.load(Relaxed) +
             self.second_gallop.load(Relaxed) +
@@ -71,7 +69,6 @@ impl Debug for Stats {
         let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64;
         let merge = self.merge.load(Relaxed) as f64 / sum as f64;
         // let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
-        let build_pack = self.build_pack.load(Relaxed) as f64 / sum as f64;
         let first_gallop = self.first_gallop.load(Relaxed) as f64 / sum as f64;
         let add_one_group = self.add_one_group.load(Relaxed) as f64 / sum as f64;
         let second_gallop = self.second_gallop.load(Relaxed) as f64 / sum as f64;
@@ -85,7 +82,6 @@ impl Debug for Stats {
         let pl_normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum_pl as f64;
         let pl_merge = self.merge.load(Relaxed) as f64 / sum_pl as f64;
         let pl_get_pls = self.get_pls.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_build_pack = self.build_pack.load(Relaxed) as f64 / sum_pl as f64;
         let pl_first_gallop = self.first_gallop.load(Relaxed) as f64 / sum_pl as f64;
         let pl_add_one_group = self.add_one_group.load(Relaxed) as f64 / sum_pl as f64;
         let pl_second_gallop = self.second_gallop.load(Relaxed) as f64 / sum_pl as f64;
@@ -100,7 +96,6 @@ impl Debug for Stats {
             .field("normalize_tokenize", &format_args!("({:.3}ms, {normalize_tokenize:.3}%, {pl_normalize_tokenize:.3}%)", self.normalize_tokenize.load(Relaxed) as f64 / 1000f64))
             .field("merge", &format_args!("({:.3}ms, {merge:.3}%, {pl_merge:.3}%)", self.merge.load(Relaxed) as f64 / 1000f64))
             .field("get_pls", &format_args!("({:.3}ms, _%, {pl_get_pls:.3}%)", self.get_pls.load(Relaxed) as f64 / 1000f64))
-            .field("build_pack", &format_args!("({:.3}ms, {build_pack:.3}%, {pl_build_pack:.3}%)", self.build_pack.load(Relaxed) as f64 / 1000f64))
             .field("first_gallop", &format_args!("({:.3}ms, {first_gallop:.3}%, {pl_first_gallop:.3}%)", self.first_gallop.load(Relaxed) as f64 / 1000f64))
             .field("add_one_group", &format_args!("({:.3}ms, {add_one_group:.3}%, {pl_add_one_group:.3}%)", self.add_one_group.load(Relaxed) as f64 / 1000f64))
             .field("second_gallop", &format_args!("({:.3}ms, {second_gallop:.3}%, {pl_second_gallop:.3}%)", self.second_gallop.load(Relaxed) as f64 / 1000f64))
@@ -131,7 +126,7 @@ where
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
 
     db_token_to_token_id: Database<Str, NativeU32>,
-    db_token_id_to_posting_list: Database<NativeU32, ZeroCopyCodec<PostingList>>,
+    db_token_id_to_roaringish_packed: Database<NativeU32, ZeroCopyCodec<RoaringishPacked>>,
     db_common_token_id_to_token: Database<NativeU32, Str>,
 
     common_tokens: AHashSet<Box<str>>,
@@ -180,11 +175,11 @@ where
             .create_database(&mut wrtxn, Some("token_to_token_id"))
             .unwrap();
 
-        let db_token_id_to_posting_list = env
+        let db_token_id_to_roaringish_packed = env
             .database_options()
-            .types::<NativeU32, ZeroCopyCodec<PostingList>>()
+            .types::<NativeU32, ZeroCopyCodec<RoaringishPacked>>()
             .flags(DatabaseFlags::REVERSE_KEY)
-            .name("token_id_to_posting_list")
+            .name("db_token_id_to_roaringish_packed")
             .create(&mut wrtxn)
             .unwrap();
 
@@ -201,7 +196,7 @@ where
         Self {
             env,
             db_doc_id_to_document,
-            db_token_id_to_posting_list,
+            db_token_id_to_roaringish_packed,
             db_token_to_token_id,
             db_common_token_id_to_token,
             common_tokens: AHashSet::new(),
@@ -242,8 +237,9 @@ where
     pub(crate) fn write_postings_list(&self, rwtxn: &mut RwTxn, token_id_to_pl: &[PostingList]) {
         for (token_id, pl) in token_id_to_pl.iter().enumerate() {
             let token_id = token_id as u32;
-            self.db_token_id_to_posting_list
-                .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &pl)
+            let packed = RoaringishPacked::from(pl);
+            self.db_token_id_to_roaringish_packed
+                .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &packed)
                 .unwrap();
         }
     }
@@ -300,11 +296,11 @@ where
             .unwrap()
             .unwrap();
 
-        let db_token_id_to_posting_list = env
+        let db_token_id_to_roaringish_packed = env
             .database_options()
-            .types::<NativeU32, ZeroCopyCodec<PostingList>>()
+            .types::<NativeU32, ZeroCopyCodec<RoaringishPacked>>()
             .flags(DatabaseFlags::REVERSE_KEY)
-            .name("token_id_to_posting_list")
+            .name("db_token_id_to_roaringish_packed")
             .open(&rotxn)
             .unwrap()
             .unwrap();
@@ -328,7 +324,7 @@ where
         Self {
             env,
             db_doc_id_to_document,
-            db_token_id_to_posting_list,
+            db_token_id_to_roaringish_packed,
             db_token_to_token_id,
             db_common_token_id_to_token,
             common_tokens,
@@ -390,9 +386,7 @@ where
             return Vec::new();
         };
 
-        let pl = self.get_posting_list(rotxn, token_id);
-
-        pl.doc_ids.iter().map(|doc_id| doc_id.to_native()).collect()
+        self.get_roaringish_packed(rotxn, token_id).get_doc_ids()
     }
 
     // pub fn get_documents_by_ids(&self, doc_ids: Vec<u32>)
@@ -434,13 +428,13 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn get_posting_list<'a>(
+    pub(crate) fn get_roaringish_packed<'a>(
         &self,
         rotxn: &'a RoTxn,
         token_id: u32,
-    ) -> &'a ArchivedPostingList {
+    ) -> &'a ArchivedRoaringishPacked {
         unsafe {
-            self.db_token_id_to_posting_list
+            self.db_token_id_to_roaringish_packed
                 .get(&rotxn, &token_id)
                 .unwrap_unchecked()
                 .unwrap_unchecked()
@@ -482,17 +476,13 @@ where
                 return Vec::new();
             };
 
-            let pl = self.get_posting_list(&rotxn, token_id);
+            let pl = self.get_roaringish_packed(&rotxn, token_id);
             stats
             .get_pls
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
             token_to_token_id.insert(*token, token_id);
-            let b = std::time::Instant::now();
-            token_id_to_packed.insert(token_id, RoaringishPacked::from(pl));
-            stats
-            .build_pack
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+            token_id_to_packed.insert(token_id, pl);
         }
 
 
@@ -507,19 +497,19 @@ where
         let rhs = token_id_to_packed.get(rhs).unwrap();
         let mut lhs = if *lhs_len > 1 {
             let b = std::time::Instant::now();
-            let lhs = lhs + (*lhs_len - 1);
+            let lhs = *lhs + (*lhs_len - 1);
             stats
             .add_lhs
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-            lhs.intersect::<I>(rhs, *rhs_len, stats)
+            lhs.intersect::<I, _>(*rhs, *rhs_len, stats)
         } else {
-            lhs.intersect::<I>(rhs, *rhs_len, stats)
+            lhs.intersect::<I, _>(*rhs, *rhs_len, stats)
         };
 
         for (t, t_len) in it {
             let rhs = token_to_token_id.get(t).unwrap();
             let rhs = token_id_to_packed.get(rhs).unwrap();
-            lhs = lhs.intersect::<I>(rhs, *t_len, stats);
+            lhs = lhs.intersect::<I, _>(*rhs, *t_len, stats);
         }
         lhs.get_doc_ids()
     }

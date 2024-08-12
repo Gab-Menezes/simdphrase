@@ -4,6 +4,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use rkyv::{Archive, Deserialize, Serialize};
 #[allow(unused_imports)]
 use std::arch::x86_64::{__m256i, __m512i};
+use std::marker::PhantomData;
 use std::simd::cmp::SimdPartialOrd;
 use std::{
     fmt::{Binary, Debug, Display},
@@ -15,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    pl::{ArchivedPostingList, PostingList},
+    pl::{PostingList},
     Stats,
 };
 
@@ -179,29 +180,71 @@ impl Roaringish {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize, Archive)]
 pub struct RoaringishPacked {
     pub doc_id_groups: Box<[u64]>,
     pub positions: Box<[u16]>,
 }
 
-pub struct BorrowRoaringishPacked<'a> {
-    pub(crate) doc_id_groups: &'a [u64],
-    pub(crate) positions: &'a [u16],
+pub struct BorrowRoaringishPacked<'a, P: Packed> {
+    pub(crate) doc_id_groups: &'a [P::DocIdGroup],
+    pub(crate) positions: &'a [P::Position],
+    _marker: PhantomData<P>
 }
 
-impl<'a> BorrowRoaringishPacked<'a> {
-    pub fn new(r: &'a RoaringishPacked) -> Self {
+impl<'a, P: Packed> BorrowRoaringishPacked<'a, P> {
+    pub fn new(r: &'a P) -> Self {
         Self {
-            doc_id_groups: &r.doc_id_groups,
-            positions: &r.positions,
+            doc_id_groups: r.doc_id_groups(),
+            positions: r.positions(),
+            _marker: PhantomData
         }
     }
 
-    pub fn from_raw(doc_id_groups: &'a [u64], positions: &'a [u16]) -> Self {
+    pub fn from_raw(doc_id_groups: &'a [P::DocIdGroup], positions: &'a [P::Position]) -> Self {
         Self {
             doc_id_groups,
             positions,
+            _marker: PhantomData
+        }
+    }
+}
+
+impl ArchivedRoaringishPacked {
+    pub fn get_doc_ids(&self) -> Vec<u32> {
+        if self.doc_id_groups.len() == 0 {
+            return Vec::new();
+        }
+
+        if self.doc_id_groups.len() == 1 {
+            return vec![get_doc_id(self.doc_id_groups[0].to_native())];
+        }
+
+        let mut doc_ids: Box<[MaybeUninit<u32>]> = Box::new_uninit_slice(self.doc_id_groups.len());
+        let mut i = 0;
+
+        for [packed0, packed1] in self.doc_id_groups.array_windows::<2>() {
+            let doc_id0 = get_doc_id(packed0.to_native());
+            let doc_id1 = get_doc_id(packed1.to_native());
+            if doc_id0 != doc_id1 {
+                unsafe { doc_ids.get_unchecked_mut(i).write(doc_id0) };
+                i += 1;
+            }
+        }
+
+        unsafe {
+            doc_ids
+                .get_unchecked_mut(i)
+                .write(get_doc_id(self.doc_id_groups.last().unwrap_unchecked().to_native()))
+        };
+        i += 1;
+
+        unsafe {
+            Vec::from_raw_parts(
+                Box::into_raw(doc_ids) as *mut _,
+                i,
+                self.doc_id_groups.len(),
+            )
         }
     }
 }
@@ -243,19 +286,161 @@ impl RoaringishPacked {
             )
         }
     }
+}
 
-    pub fn intersect<I: Intersect>(&self, rhs: &Self, rhs_len: u32, stats: &Stats) -> Self {
+impl Add<u32> for &ArchivedRoaringishPacked {
+    type Output = RoaringishPacked;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        unsafe {
+            assume(self.doc_id_groups.len() == self.positions.len());
+        }
+
+        let n = self.doc_id_groups.len() * 2;
+        let mut doc_id_groups = Box::new_uninit_slice(n);
+        let mut positions = Box::new_uninit_slice(n);
+        let mut i = 0;
+
+        let mask = u16::MAX << rhs;
+        let bits_to_check = !mask;
+        for (doc_id_group, values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
+            let new_positions = values.to_native().rotate_left(rhs as u32);
+            let postions_current_group = new_positions & mask;
+            let postions_new_group = new_positions & bits_to_check;
+            if postions_current_group > 0 {
+                unsafe {
+                    doc_id_groups.get_unchecked_mut(i).write(doc_id_group.to_native());
+                    positions.get_unchecked_mut(i).write(postions_current_group);
+                    i += 1;
+                }
+            }
+            if postions_new_group > 0 {
+                unsafe {
+                    doc_id_groups.get_unchecked_mut(i).write(doc_id_group.to_native() + 1);
+                    positions.get_unchecked_mut(i).write(postions_new_group);
+                    i += 1;
+                }
+            }
+        }
+
+        unsafe {
+            RoaringishPacked {
+                doc_id_groups: Vec::from_raw_parts(Box::into_raw(doc_id_groups) as *mut _, i, n)
+                    .into_boxed_slice(),
+                positions: Vec::from_raw_parts(Box::into_raw(positions) as *mut _, i, n)
+                    .into_boxed_slice(),
+            }
+        }
+    }
+}
+
+impl Add<u32> for &RoaringishPacked {
+    type Output = RoaringishPacked;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        unsafe {
+            assume(self.doc_id_groups.len() == self.positions.len());
+        }
+
+        let n = self.doc_id_groups.len() * 2;
+        let mut doc_id_groups = Box::new_uninit_slice(n);
+        let mut positions = Box::new_uninit_slice(n);
+        let mut i = 0;
+
+        let mask = u16::MAX << rhs;
+        let bits_to_check = !mask;
+        for (doc_id_group, values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
+            let new_positions = values.rotate_left(rhs as u32);
+            let postions_current_group = new_positions & mask;
+            let postions_new_group = new_positions & bits_to_check;
+            if postions_current_group > 0 {
+                unsafe {
+                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
+                    positions.get_unchecked_mut(i).write(postions_current_group);
+                    i += 1;
+                }
+            }
+            if postions_new_group > 0 {
+                unsafe {
+                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + 1);
+                    positions.get_unchecked_mut(i).write(postions_new_group);
+                    i += 1;
+                }
+            }
+        }
+
+        unsafe {
+            RoaringishPacked {
+                doc_id_groups: Vec::from_raw_parts(Box::into_raw(doc_id_groups) as *mut _, i, n)
+                    .into_boxed_slice(),
+                positions: Vec::from_raw_parts(Box::into_raw(positions) as *mut _, i, n)
+                    .into_boxed_slice(),
+            }
+        }
+    }
+}
+
+impl From<&PostingList> for RoaringishPacked {
+    fn from(pl: &PostingList) -> Self {
+        let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(pl.len_sum as usize);
+        let mut positions: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(pl.len_sum as usize);
+
+        let doc_ids = pl.doc_ids.as_slice();
+        let roaringish = pl.positions.as_slice();
+        unsafe { assume(doc_ids.len() == roaringish.len()) }
+
+        let mut b = 0;
+        for (doc_id, roaringish) in doc_ids.iter().zip(roaringish.iter()) {
+            let doc_id = make_doc_id(*doc_id);
+
+            let doc_id_groups =
+                unsafe { doc_id_groups.get_unchecked_mut(b..(b + roaringish.inner.len())) };
+            let positions = unsafe { positions.get_unchecked_mut(b..(b + roaringish.inner.len())) };
+            b += roaringish.inner.len();
+
+            for ((doc_id_group, position), packed) in doc_id_groups
+                .iter_mut()
+                .zip(positions.iter_mut())
+                .zip(roaringish.inner.iter())
+            {
+                let group = get_group(*packed) as u64;
+                let encoded_positions = get_encoded_positions(*packed) as u16;
+                doc_id_group.write(doc_id | group);
+                position.write(encoded_positions);
+            }
+        }
+
+        let doc_id_groups = unsafe { doc_id_groups.assume_init() };
+        let positions = unsafe { positions.assume_init() };
+        Self {
+            doc_id_groups,
+            positions,
+        }
+    }
+}
+
+pub trait Packed {
+    type DocIdGroup: Copy + Into<u64>;
+    type Position: Copy + Into<u16>;
+
+    fn doc_id_groups(&self) -> &[Self::DocIdGroup];
+    fn positions(&self) -> &[Self::Position];
+
+    fn intersect<I: Intersect, R: Packed>(&self, rhs: &R, rhs_len: u32, stats: &Stats) -> RoaringishPacked 
+    where
+        Self: Packed + Sized
+    {
         let lhs = BorrowRoaringishPacked::new(self);
         let rhs = BorrowRoaringishPacked::new(rhs);
         let b = std::time::Instant::now();
-        let (doc_id_groups, lhs_positions, rhs_positions, msb_doc_id_groups) = I::intersect::<true>(&lhs, &rhs);
+        let (doc_id_groups, lhs_positions, rhs_positions, msb_doc_id_groups) = I::intersect::<true, _, R>(&lhs, &rhs);
         stats
             .first_gallop
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &[]);
+        let msb_packed = BorrowRoaringishPacked::<RoaringishPacked>::from_raw(&msb_doc_id_groups, &[]);
         let b = std::time::Instant::now();
-        let (msb_doc_id_groups, _, msb_rhs_positions, _) = I::intersect::<false>(&msb_packed, &rhs);
+        let (msb_doc_id_groups, _, msb_rhs_positions, _) = I::intersect::<false, RoaringishPacked, R>(&msb_packed, &rhs);
 
         stats
             .second_gallop
@@ -381,7 +566,7 @@ impl RoaringishPacked {
             let positions =
                 Vec::from_raw_parts(Box::into_raw(r_positions) as *mut _, r_i, capacity)
                     .into_boxed_slice();
-            Self {
+            RoaringishPacked {
                 doc_id_groups,
                 positions,
             }
@@ -399,129 +584,33 @@ impl RoaringishPacked {
     }
 }
 
-impl Add<u32> for &RoaringishPacked {
-    type Output = RoaringishPacked;
+impl Packed for RoaringishPacked {
+    type DocIdGroup = u64;
+    type Position = u16;
 
-    fn add(self, rhs: u32) -> Self::Output {
-        unsafe {
-            assume(self.doc_id_groups.len() == self.positions.len());
-        }
+    #[inline(always)]
+    fn doc_id_groups(&self) -> &[Self::DocIdGroup] {
+        &self.doc_id_groups
+    }
 
-        let n = self.doc_id_groups.len() * 2;
-        let mut doc_id_groups = Box::new_uninit_slice(n);
-        let mut positions = Box::new_uninit_slice(n);
-        let mut i = 0;
-
-        let mask = u16::MAX << rhs;
-        let bits_to_check = !mask;
-        for (doc_id_group, values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
-            let new_positions = values.rotate_left(rhs as u32);
-            let postions_current_group = new_positions & mask;
-            let postions_new_group = new_positions & bits_to_check;
-            if postions_current_group > 0 {
-                unsafe {
-                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
-                    positions.get_unchecked_mut(i).write(postions_current_group);
-                    i += 1;
-                }
-            }
-            if postions_new_group > 0 {
-                unsafe {
-                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + 1);
-                    positions.get_unchecked_mut(i).write(postions_new_group);
-                    i += 1;
-                }
-            }
-        }
-
-        unsafe {
-            RoaringishPacked {
-                doc_id_groups: Vec::from_raw_parts(Box::into_raw(doc_id_groups) as *mut _, i, n)
-                    .into_boxed_slice(),
-                positions: Vec::from_raw_parts(Box::into_raw(positions) as *mut _, i, n)
-                    .into_boxed_slice(),
-            }
-        }
+    #[inline(always)]
+    fn positions(&self) -> &[Self::Position] {
+        &self.positions
     }
 }
 
-impl From<&PostingList> for RoaringishPacked {
-    fn from(pl: &PostingList) -> Self {
-        let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(pl.len_sum as usize);
-        let mut positions: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(pl.len_sum as usize);
+impl Packed for ArchivedRoaringishPacked {
+    type DocIdGroup = rkyv::rend::unaligned::u64_ule;
+    type Position = rkyv::rend::unaligned::u16_ule;
 
-        let doc_ids = pl.doc_ids.as_slice();
-        let roaringish = pl.positions.as_slice();
-        unsafe { assume(doc_ids.len() == roaringish.len()) }
-
-        let mut b = 0;
-        for (doc_id, roaringish) in doc_ids.iter().zip(roaringish.iter()) {
-            let doc_id = make_doc_id(*doc_id);
-
-            let doc_id_groups =
-                unsafe { doc_id_groups.get_unchecked_mut(b..(b + roaringish.inner.len())) };
-            let positions = unsafe { positions.get_unchecked_mut(b..(b + roaringish.inner.len())) };
-            b += roaringish.inner.len();
-
-            for ((doc_id_group, position), packed) in doc_id_groups
-                .iter_mut()
-                .zip(positions.iter_mut())
-                .zip(roaringish.inner.iter())
-            {
-                let group = get_group(*packed) as u64;
-                let encoded_positions = get_encoded_positions(*packed) as u16;
-                doc_id_group.write(doc_id | group);
-                position.write(encoded_positions);
-            }
-        }
-
-        let doc_id_groups = unsafe { doc_id_groups.assume_init() };
-        let positions = unsafe { positions.assume_init() };
-        Self {
-            doc_id_groups,
-            positions,
-        }
+    #[inline(always)]
+    fn doc_id_groups(&self) -> &[Self::DocIdGroup] {
+        &self.doc_id_groups
     }
-}
 
-impl From<&ArchivedPostingList> for RoaringishPacked {
-    fn from(pl: &ArchivedPostingList) -> Self {
-        let mut doc_id_groups: Box<[MaybeUninit<u64>]> =
-            Box::new_uninit_slice(pl.len_sum.to_native() as usize);
-        let mut positions: Box<[MaybeUninit<u16>]> =
-            Box::new_uninit_slice(pl.len_sum.to_native() as usize);
-
-        let doc_ids = pl.doc_ids.as_slice();
-        let roaringish = pl.positions.as_slice();
-        unsafe { assume(doc_ids.len() == roaringish.len()) }
-
-        let mut b = 0;
-        for (doc_id, roaringish) in doc_ids.iter().zip(roaringish.iter()) {
-            let doc_id = make_doc_id(doc_id.to_native());
-
-            let doc_id_groups =
-                unsafe { doc_id_groups.get_unchecked_mut(b..(b + roaringish.inner.len())) };
-            let positions = unsafe { positions.get_unchecked_mut(b..(b + roaringish.inner.len())) };
-            b += roaringish.inner.len();
-
-            for ((doc_id_group, position), packed) in doc_id_groups
-                .iter_mut()
-                .zip(positions.iter_mut())
-                .zip(roaringish.inner.iter())
-            {
-                let group = get_group(packed.to_native()) as u64;
-                let encoded_positions = get_encoded_positions(packed.to_native()) as u16;
-                doc_id_group.write(doc_id | group);
-                position.write(encoded_positions);
-            }
-        }
-
-        let doc_id_groups = unsafe { doc_id_groups.assume_init() };
-        let positions = unsafe { positions.assume_init() };
-        Self {
-            doc_id_groups,
-            positions,
-        }
+    #[inline(always)]
+    fn positions(&self) -> &[Self::Position] {
+        &self.positions
     }
 }
 

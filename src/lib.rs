@@ -29,6 +29,5 @@ pub use utils::{normalize, tokenize};
 pub use roaringish::RoaringishPacked;
 pub use roaringish::BorrowRoaringishPacked;
 pub use roaringish::intersect::Intersect;
-pub use roaringish::intersect::gallop;
 pub use roaringish::intersect::naive;
 pub use roaringish::intersect::simd;

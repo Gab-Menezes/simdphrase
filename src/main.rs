@@ -8,7 +8,7 @@ use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{gallop::GallopIntersect, naive::NaiveIntersect, normalize, tokenize, simd::SimdIntersect, BorrowRoaringishPacked, CommonTokens, Indexer, Intersect, RoaringishPacked, Searcher, Stats};
+use phrase_search::{naive::NaiveIntersect, normalize, tokenize, simd::SimdIntersect, BorrowRoaringishPacked, CommonTokens, Indexer, Intersect, RoaringishPacked, Searcher, Stats};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
