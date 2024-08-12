@@ -248,27 +248,14 @@ impl RoaringishPacked {
         let lhs = BorrowRoaringishPacked::new(self);
         let rhs = BorrowRoaringishPacked::new(rhs);
         let b = std::time::Instant::now();
-        let (doc_id_groups, lhs_positions, rhs_positions) = I::intersect::<true>(&lhs, &rhs);
-
+        let (doc_id_groups, lhs_positions, rhs_positions, msb_doc_id_groups) = I::intersect::<true>(&lhs, &rhs);
         stats
             .first_gallop
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
+        let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &[]);
         let b = std::time::Instant::now();
-        let (msb_doc_id_groups, msb_positions): (Vec<_>, Vec<_>) = self
-            .doc_id_groups
-            .iter()
-            .zip(self.positions.iter())
-            .filter_map(|(doc_id_group, positions)| {
-                (positions & 0x8000 > 1).then(|| (*doc_id_group + 1, *positions))
-            })
-            .collect();
-        stats
-            .add_one_group
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-        let msb_packed = BorrowRoaringishPacked::from_raw(&msb_doc_id_groups, &msb_positions);
-        let b = std::time::Instant::now();
-        let (msb_doc_id_groups, _, msb_rhs_positions) = I::intersect::<false>(&msb_packed, &rhs);
+        let (msb_doc_id_groups, _, msb_rhs_positions, _) = I::intersect::<false>(&msb_packed, &rhs);
 
         stats
             .second_gallop
@@ -606,6 +593,15 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
         let mut doc_id_groups = doc_id_groups?;
         doc_id_groups.sort_unstable();
         doc_id_groups.dedup();
+
+        match doc_id_groups.last().copied() {
+            Some(v) => {
+                if v == u64::MAX {
+                    doc_id_groups.pop();
+                }
+            },
+            None => {},
+        }
 
         let positions: Result<Vec<u16>, _> =
             u.arbitrary_iter()?.take(doc_id_groups.len()).collect();

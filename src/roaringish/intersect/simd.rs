@@ -76,7 +76,7 @@ impl Intersect for SimdIntersectCMOV {
     fn intersect<const FIRST: bool>(
         lhs: &BorrowRoaringishPacked,
         rhs: &BorrowRoaringishPacked,
-    ) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
+    ) -> (Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>) {
         let lhs_positions = lhs.positions;
         let rhs_positions = rhs.positions;
         let lhs_doc_id_groups = lhs.doc_id_groups;
@@ -267,6 +267,8 @@ impl Intersect for SimdIntersectCMOV {
                     Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
                 },
                 Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
+                // TODO: FIX
+                Vec::new()
             )
         }
     }
@@ -279,7 +281,7 @@ impl Intersect for SimdIntersectBranch {
     fn intersect<const FIRST: bool>(
         lhs: &BorrowRoaringishPacked,
         rhs: &BorrowRoaringishPacked,
-    ) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
+    ) -> (Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>) {
         let lhs_positions = lhs.positions;
         let rhs_positions = rhs.positions;
         let lhs_doc_id_groups = lhs.doc_id_groups;
@@ -466,6 +468,8 @@ impl Intersect for SimdIntersectBranch {
                     Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
                 },
                 Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
+                // TODO: FIX
+                Vec::new()
             )
         }
     }

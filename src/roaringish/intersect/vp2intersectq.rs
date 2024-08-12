@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use std::arch::x86_64::{__m256i, __m512i};
+use std::simd::{LaneCount, SupportedLaneCount};
 #[allow(unused_imports)]
 use std::{
     intrinsics::assume,
@@ -98,6 +99,40 @@ unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (Simd<u64, 4>, Simd<u64, 4>) 
     (mask0.into(), mask1.into())
 }
 
+#[inline(always)]
+unsafe fn analyze_msb<const N: usize>(a: &[u64], a_positions: &[u16], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) 
+where
+    LaneCount<N>: SupportedLaneCount
+{
+    let positions = unsafe { a_positions.get_unchecked(lhs_i..(lhs_i + N)) };
+    let vpositions: Simd<u16, N> = Simd::from_slice(positions);
+    let vmsb_set = (vpositions & Simd::splat(0x8000)).simd_gt(Simd::splat(0));
+
+    #[cfg(target_feature = "avx512f")]
+    {
+        use std::arch::x86_64::_mm512_mask_compressstoreu_epi64;
+        let mask = vmsb_set.to_bitmask() as u8;
+        let doc_id_groups_plus_one: Simd<u64, N> = Simd::splat(1) + va.into();
+        unsafe {
+            _mm512_mask_compressstoreu_epi64(
+                msb_doc_id_groups_result.as_mut_ptr().add(j) as *mut _,
+                mask,
+                doc_id_groups_plus_one.into(),
+            );
+        }
+        j += j.count_ones() as usize;
+    }
+
+    #[cfg(not(target_feature = "avx512f"))]
+    {
+        for (k, set) in vmsb_set.to_array().into_iter().enumerate() {
+            let doc_id_groups = unsafe { a.get_unchecked(lhs_i + k) };
+            unsafe { msb_doc_id_groups_result.get_unchecked_mut(*j).write(doc_id_groups + 1) };
+            *j += set as usize;
+        }
+    }
+}
+
 pub struct Vp2Intersectq;
 impl IntersectSeal for Vp2Intersectq {}
 
@@ -105,7 +140,7 @@ impl Intersect for Vp2Intersectq {
     fn intersect<const FIRST: bool>(
         lhs: &BorrowRoaringishPacked,
         rhs: &BorrowRoaringishPacked,
-    ) -> (Vec<u64>, Vec<u16>, Vec<u16>) {
+    ) -> (Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>) {
         let lhs_positions = lhs.positions;
         let rhs_positions = rhs.positions;
         let lhs_doc_id_groups = lhs.doc_id_groups;
@@ -116,7 +151,13 @@ impl Intersect for Vp2Intersectq {
 
         let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len()) + 1;
         let mut i = 0;
+        let mut j = 0;
         let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
+        let mut msb_doc_id_groups_result: Box<[MaybeUninit<u64>]> = if FIRST {
+            Box::new_uninit_slice(lhs_doc_id_groups.len() + 1)
+        } else {
+            Box::new_uninit_slice(0)
+        };
         let mut lhs_positions_result: Box<[MaybeUninit<u16>]> = if FIRST {
             Box::new_uninit_slice(min)
         } else {
@@ -135,6 +176,7 @@ impl Intersect for Vp2Intersectq {
         let b = unsafe { rhs_doc_id_groups.get_unchecked(..end_rhs) };
         let a_positions = unsafe { lhs_positions.get_unchecked(..end_lhs) };
         let b_positions = unsafe { rhs_positions.get_unchecked(..end_rhs) };
+        let mut need_to_analyze_msb = false;
         unsafe {
             assume(a.len() % N == 0);
             assume(b.len() % N == 0);
@@ -224,17 +266,22 @@ impl Intersect for Vp2Intersectq {
             let last_a = unsafe { *a.as_ptr().add(lhs_i + N - 1) };
             let last_b = unsafe { *b.as_ptr().add(rhs_i + N - 1) };
 
-            lhs_i += N * (last_a <= last_b) as usize;
+            if FIRST {
+                if last_a <= last_b {
+                    unsafe { analyze_msb::<N>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) };
+                    lhs_i += N;
+                }
+            } else {
+                lhs_i += N * (last_a <= last_b) as usize;
+            }
             rhs_i += N * (last_b <= last_a) as usize;
+            need_to_analyze_msb = last_b < last_a;
+        }
 
-            // let va: Simd<u64, N> = va.into();
-            // let vb: Simd<u64, N> = vb.into();
-
-            // let last_va = Simd::splat(last_a);
-            // let last_vb = Simd::splat(last_b);
-
-            // lhs_i += 64 - va.simd_le(last_vb).to_bitmask().leading_zeros() as usize;
-            // rhs_i += 64 - vb.simd_le(last_va).to_bitmask().leading_zeros() as usize;
+        if FIRST {
+            if need_to_analyze_msb && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len()) {
+                unsafe { analyze_msb::<N>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) };
+            }
         }
 
         // for the remaining elements we can do a 2 pointer approach
@@ -246,18 +293,16 @@ impl Intersect for Vp2Intersectq {
                 unsafe {
                     doc_id_groups_result
                         .get_unchecked_mut(i)
-                        .write(*lhs_doc_id_groups)
+                        .write(*lhs_doc_id_groups);
+                    let rhs = *rhs_positions.get_unchecked(rhs_i);
+                    rhs_positions_result.get_unchecked_mut(i).write(rhs);
+                    if FIRST {
+                        let lhs = *lhs_positions.get_unchecked(lhs_i);
+                        lhs_positions_result.get_unchecked_mut(i).write(lhs);
+                        msb_doc_id_groups_result.get_unchecked_mut(j).write(lhs_doc_id_groups + 1);
+                        j += (lhs & 0x8000 > 1) as usize;
+                    }
                 };
-                if FIRST {
-                    let lhs = unsafe { *lhs_positions.get_unchecked(lhs_i) };
-                    unsafe { lhs_positions_result.get_unchecked_mut(i).write(lhs) };
-
-                    let rhs = unsafe { *rhs_positions.get_unchecked(rhs_i) };
-                    unsafe { rhs_positions_result.get_unchecked_mut(i).write(rhs) };
-                } else {
-                    let rhs = unsafe { *rhs_positions.get_unchecked(rhs_i) };
-                    unsafe { rhs_positions_result.get_unchecked_mut(i).write(rhs) };
-                }
 
                 i += 1;
                 lhs_i += 1;
@@ -265,6 +310,14 @@ impl Intersect for Vp2Intersectq {
             } else if lhs_doc_id_groups > rhs_doc_id_groups {
                 rhs_i += 1;
             } else {
+                if FIRST {
+                    unsafe {
+                        let lhs = *lhs_positions.get_unchecked(lhs_i);
+                        msb_doc_id_groups_result.get_unchecked_mut(j).write(lhs_doc_id_groups + 1);
+                        j += (lhs & 0x8000 > 1) as usize;
+                    }
+                }
+
                 lhs_i += 1;
             }
         }
@@ -272,15 +325,24 @@ impl Intersect for Vp2Intersectq {
         let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
         let lhs_positions_result_ptr = Box::into_raw(lhs_positions_result) as *mut _;
         let rhs_positions_result_ptr = Box::into_raw(rhs_positions_result) as *mut _;
+        let msb_doc_id_groups_result_ptr = Box::into_raw(msb_doc_id_groups_result) as *mut _;
         unsafe {
             (
                 Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
+
                 if FIRST {
                     Vec::from_raw_parts(lhs_positions_result_ptr, i, min)
                 } else {
                     Vec::from_raw_parts(lhs_positions_result_ptr, 0, 0)
                 },
+
                 Vec::from_raw_parts(rhs_positions_result_ptr, i, min),
+
+                if FIRST {
+                    Vec::from_raw_parts(msb_doc_id_groups_result_ptr, j, lhs_doc_id_groups.len() + 1)
+                } else {
+                    Vec::from_raw_parts(msb_doc_id_groups_result_ptr, 0, 0)
+                },
             )
         }
     }
