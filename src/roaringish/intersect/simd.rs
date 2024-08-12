@@ -296,7 +296,17 @@ impl Intersect for SimdIntersect {
 
         if FIRST {
             if need_to_analyze_msb && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len()) {
-                unsafe { simple_analyze_msb::<N>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) };
+                #[cfg(target_feature = "avx512f")]
+                unsafe {
+                    use std::arch::x86_64::_mm512_loadu_epi64;
+                    let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
+                    avx512_analyze_msb(va, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
+                };
+
+                #[cfg(not(target_feature = "avx512f"))]
+                unsafe {
+                    simple_analyze_msb::<N>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) 
+                };
             }
         }
 
