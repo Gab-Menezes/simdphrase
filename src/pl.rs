@@ -26,3 +26,8 @@ impl PostingList {
         self.positions.push(positions);
     }
 }
+
+pub enum CachePostingList<'a, 'b> {
+    Cached(&'a PostingList),
+    NotCached(&'b ArchivedPostingList)
+}

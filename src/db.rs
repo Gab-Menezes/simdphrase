@@ -1,15 +1,5 @@
 use std::{
-    cell::UnsafeCell,
-    cmp::Reverse,
-    collections::BTreeSet,
-    fmt::{Debug, Display},
-    fs::{DirEntry, OpenOptions},
-    io::{Error, Write},
-    iter::{Peekable, Zip},
-    path::{Path, PathBuf},
-    slice::Iter,
-    str::FromStr,
-    sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
+    borrow::Cow, cell::UnsafeCell, cmp::Reverse, collections::BTreeSet, fmt::{Debug, Display}, fs::{DirEntry, OpenOptions}, io::{Error, Write}, iter::{Peekable, Zip}, path::{Path, PathBuf}, slice::Iter, str::FromStr, sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed}
 };
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
@@ -27,7 +17,7 @@ use roaring::RoaringBitmap;
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    pl::{ArchivedPostingList, PostingList},
+    pl::{ArchivedPostingList, CachePostingList, PostingList},
     roaringish::{intersect::Intersect, RoaringishPacked},
     tokenize,
     utils::MAX_SEQ_LEN,
@@ -158,6 +148,7 @@ where
     db_common_token_id_to_token: Database<NativeU32, Str>,
 
     common_tokens: AHashSet<Box<str>>,
+    common_tokens_id_to_posting_list: FxHashMap<u32, PostingList>,
 }
 
 unsafe impl<D> Send for DB<D> where
@@ -228,6 +219,7 @@ where
             db_token_to_token_id,
             db_common_token_id_to_token,
             common_tokens: AHashSet::new(),
+            common_tokens_id_to_posting_list: FxHashMap::new()
         }
     }
 
@@ -341,12 +333,8 @@ where
             .unwrap()
             .unwrap();
 
-        let common_tokens = Self::read_common_tokens(&rotxn, db_common_token_id_to_token);
-        // let common_tokens = AHashSet::new();
-        let sorted: BTreeSet<_> = common_tokens.iter().collect();
+        let (common_tokens, common_tokens_id_to_posting_list) = Self::read_common_tokens(&rotxn, db_common_token_id_to_token, db_token_id_to_posting_list);
         rotxn.commit().unwrap();
-
-        println!("Common tokens ({}): {sorted:?}", sorted.len());
 
         Self {
             env,
@@ -355,17 +343,28 @@ where
             db_token_to_token_id,
             db_common_token_id_to_token,
             common_tokens,
+            common_tokens_id_to_posting_list
         }
     }
 
     fn read_common_tokens(
         rotxn: &RoTxn,
         db_common_token_id_to_token: Database<NativeU32, Str>,
-    ) -> AHashSet<Box<str>> {
+        db_token_id_to_posting_list: Database<NativeU32, ZeroCopyCodec<PostingList>>
+    ) -> (AHashSet<Box<str>>, FxHashMap<u32, PostingList>) {
         db_common_token_id_to_token
             .iter(rotxn)
             .unwrap()
-            .map(|r| r.unwrap().1.to_string().into_boxed_str())
+            .map(|r| {
+                let r = r.unwrap();
+                let pl =
+                    db_token_id_to_posting_list
+                    .get(&rotxn, &r.0)
+                    .unwrap()
+                    .unwrap();
+                let pl = rkyv::deserialize::<PostingList, rkyv::rancor::Error>(pl).unwrap();
+                (r.1.to_string().into_boxed_str(), (r.0, pl))
+            })
             .collect()
     }
 
@@ -415,7 +414,10 @@ where
 
         let pl = self.get_posting_list(rotxn, token_id);
 
-        pl.doc_ids.iter().map(|doc_id| doc_id.to_native()).collect()
+        match pl {
+            CachePostingList::Cached(pl) => pl.doc_ids.iter().copied().collect(),
+            CachePostingList::NotCached(pl) => pl.doc_ids.iter().map(|doc_id| doc_id.to_native()).collect(),
+        }
     }
 
     // pub fn get_documents_by_ids(&self, doc_ids: Vec<u32>)
@@ -457,16 +459,19 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn get_posting_list<'a>(
-        &self,
-        rotxn: &'a RoTxn,
+    pub(crate) fn get_posting_list<'a, 'b>(
+        &'a self,
+        rotxn: &'b RoTxn,
         token_id: u32,
-    ) -> &'a ArchivedPostingList {
-        unsafe {
-            self.db_token_id_to_posting_list
-                .get(&rotxn, &token_id)
-                .unwrap_unchecked()
-                .unwrap_unchecked()
+    ) -> CachePostingList<'a, 'b> {
+        match self.common_tokens_id_to_posting_list.get(&token_id) {
+            Some(pl) => CachePostingList::Cached(pl),
+            None => unsafe {
+                CachePostingList::NotCached(self.db_token_id_to_posting_list
+                    .get(&rotxn, &token_id)
+                    .unwrap_unchecked()
+                    .unwrap_unchecked())
+            },
         }
     }
 

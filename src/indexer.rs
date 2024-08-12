@@ -311,9 +311,9 @@ where
     next_doc_id: u32,
     docs_per_shard: Option<u32>,
     indexer: Option<InnerIndexer<D>>,
-    shards: Vec<DB<D>>,
     common_tokens: Option<CommonTokens>,
     avg_document_tokens: Option<u32>,
+    next_shard_id: u32,
 }
 
 impl<'a, D> Indexer<'a, D>
@@ -335,9 +335,9 @@ where
             next_doc_id: 0,
             docs_per_shard,
             indexer: Some(InnerIndexer::new(docs_per_shard, avg_document_tokens)),
-            shards: Vec::new(),
             common_tokens,
             avg_document_tokens,
+            next_shard_id: 0,
         }
     }
 
@@ -358,14 +358,14 @@ where
                     // this should neve fail
                     let indexer = self.indexer.take().unwrap();
                     let b = std::time::Instant::now();
-                    let db = indexer.flush(
+                    indexer.flush(
                         self.path,
                         self.shard_db_size,
-                        self.shards.len() as u32,
+                        self.next_shard_id,
                         &self.common_tokens,
                     );
                     println!("Outter: {:?}", b.elapsed());
-                    self.shards.push(db);
+                    self.next_shard_id += 1;
                 }
             }
         }
@@ -373,22 +373,20 @@ where
         num_docs
     }
 
-    pub fn flush(mut self) -> Searcher<D> {
+    pub fn flush(mut self) {
         match self.indexer {
             Some(indexer) => {
                 let b = std::time::Instant::now();
-                let db = indexer.flush(
+                indexer.flush(
                     self.path,
                     self.shard_db_size,
-                    self.shards.len() as u32,
+                    self.next_shard_id,
                     &self.common_tokens,
                 );
                 println!("Outter: {:?}", b.elapsed());
-                self.shards.push(db);
+                self.next_shard_id += 1;
             }
             None => {}
         }
-
-        Searcher { shards: self.shards.into_boxed_slice() }
     }
 }
