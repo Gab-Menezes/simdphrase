@@ -7,7 +7,6 @@ use phrase_search::naive::NaiveIntersect;
 use phrase_search::naive::UnrolledNaiveIntersect;
 use phrase_search::Intersect;
 use phrase_search::gallop::GallopIntersect;
-use phrase_search::simd::SimdIntersectCMOV;
 use phrase_search::vp2intersectq::Vp2Intersectq;
 
 fn compare(lhs: &(Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>), rhs: &(Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>)) {

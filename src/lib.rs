@@ -32,4 +32,3 @@ pub use roaringish::intersect::Intersect;
 pub use roaringish::intersect::gallop;
 pub use roaringish::intersect::naive;
 pub use roaringish::intersect::simd;
-pub use roaringish::intersect::vp2intersectq;

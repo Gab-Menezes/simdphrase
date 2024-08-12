@@ -5,7 +5,6 @@ use super::BorrowRoaringishPacked;
 pub mod naive;
 pub mod gallop;
 pub mod simd;
-pub mod vp2intersectq;
 
 mod private {
     pub trait IntersectSeal {}

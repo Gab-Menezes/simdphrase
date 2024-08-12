@@ -8,7 +8,7 @@ use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{gallop::GallopIntersect, naive::NaiveIntersect, normalize, tokenize, vp2intersectq::Vp2Intersectq, BorrowRoaringishPacked, CommonTokens, Indexer, Intersect, RoaringishPacked, Searcher, Stats};
+use phrase_search::{gallop::GallopIntersect, naive::NaiveIntersect, normalize, tokenize, simd::SimdIntersect, BorrowRoaringishPacked, CommonTokens, Indexer, Intersect, RoaringishPacked, Searcher, Stats};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
@@ -237,108 +237,6 @@ fn index_msmarco(args: IndexFile) {
 }
 
 fn main() {
-    let lhs = RoaringishPacked {
-        doc_id_groups: vec![
-            3647244573519748509,
-            11357334292932697501,
-            11357407134470741405,
-            11357407135569649053,
-
-            11357407135578018973,
-            11357407135578037533,
-            11357407135578037661,
-            11357407135584485375,
-
-            11357407137228652543,
-            11357407558135393279,
-            11357433060404868607,
-            11357515310274969599,
-
-            11385099856341999005,
-            12442509688006770687,
-            13093571540388151295,
-            17412323534297890815,
-
-            17433981653976478193,
-            17433981653976478449,
-            17433981658271445489,
-            17433997106263097343,
-
-            18014398086924574109,
-            18387352853623603199,
-            18419051351294975389,
-            18444492273895866367,
-
-            18446635899012619677,
-            18446722083476996095,
-            18446743651152141725,
-            18446744072058936733,
-            
-            18446744073703103901,
-            18446744073708630513,
-            18446744073709551580,
-            18446744073709551615,
-        ].into_boxed_slice(),
-        positions: vec![
-            40349,
-            40349,
-            40349,
-            40349,
-            65535,
-            65535,
-            65535,
-            65535,
-            65535,
-            65535,
-            65535,
-            65535,
-            65535,
-            65535,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-            65437,
-            40447,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-            40349,
-        ].into_boxed_slice(),
-    };
-    let rhs = RoaringishPacked {
-        doc_id_groups: vec![
-            11357407135578037661,
-            11357433060404868607,
-            12442509688006770687,
-            18014398086924574109,
-        ].into_boxed_slice(),
-        positions: vec![
-            40349,
-            40349,
-            65535,
-            65535,
-        ].into_boxed_slice(),
-    };
-
-    let lhs = BorrowRoaringishPacked::new(&lhs);
-    let rhs = BorrowRoaringishPacked::new(&rhs);
-
-    let naive = NaiveIntersect::intersect::<true>(&lhs, &rhs);
-    let vp2intersectq = Vp2Intersectq::intersect::<true>(&lhs, &rhs);
-    // let gallop = GallopIntersect::intersect::<true>(&lhs, &rhs);
-    // assert_eq!(naive, gallop);
-    assert_eq!(naive, vp2intersectq);
-
-    return;
     let args = CommandArgs::parse();
 
     // spawn rayon threads to avoid unecessary respawn
