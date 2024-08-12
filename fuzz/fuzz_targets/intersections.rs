@@ -7,7 +7,7 @@ use phrase_search::naive::NaiveIntersect;
 use phrase_search::naive::UnrolledNaiveIntersect;
 use phrase_search::Intersect;
 use phrase_search::gallop::GallopIntersect;
-use phrase_search::vp2intersectq::Vp2Intersectq;
+use phrase_search::simd::SimdIntersect;
 
 fn compare(lhs: &(Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>), rhs: &(Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>)) {
     assert_eq!(lhs.0, rhs.0);
@@ -28,10 +28,10 @@ fuzz_target!(|r: (RoaringishPacked, RoaringishPacked)| {
     // let unrolled_naive = UnrolledNaiveIntersect::intersect::<true>(&lhs, &rhs);
     // let gallop = GallopIntersect::intersect::<true>(&lhs, &rhs);
     // let simd_cmov = SimdIntersectCMOV::intersect::<true>(&lhs, &rhs);
-    let vp2intersectq = Vp2Intersectq::intersect::<true>(&lhs, &rhs);
+    let simd = SimdIntersect::intersect::<true>(&lhs, &rhs);
 
     // assert_eq!(naive, gallop);
     // assert_eq!(naive, unrolled_naive);
     // assert_eq!(naive, simd_cmov);
-    compare(&naive, &vp2intersectq);
+    compare(&naive, &simd);
 });
