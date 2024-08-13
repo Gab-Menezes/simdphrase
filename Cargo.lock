@@ -120,30 +120,27 @@ checksum = "79296716171880943b8470b5f8d03aa55eb2e645a4874bdbb28adb49162e012c"
 
 [[package]]
 name = "bytecheck"
-version = "0.8.0-alpha.9"
-source = "git+https://github.com/rkyv/bytecheck.git#f5dcf094ad6befc9605080631fac7e0abb88ea68"
+version = "0.8.0-alpha.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea0d141e4818daa187dfe1a467031e4c99a5162593956a0d50e7ac462029f281"
 dependencies = [
  "bytecheck_derive",
  "ptr_meta",
  "rancor",
  "simdutf8",
+ "uuid",
 ]
 
 [[package]]
 name = "bytecheck_derive"
-version = "0.8.0-alpha.9"
-source = "git+https://github.com/rkyv/bytecheck.git#f5dcf094ad6befc9605080631fac7e0abb88ea68"
+version = "0.8.0-alpha.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25d4f880461508ddf3753f236d3dca0edfa84b1d80ab215ce2b78ee86d612bdc"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn",
 ]
-
-[[package]]
-name = "bytemuck"
-version = "1.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "102087e286b4677862ea56cf8fc58bb2cdfa8725c40ffb80fe3a008eb7f2fc83"
 
 [[package]]
 name = "byteorder"
@@ -646,17 +643,12 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "arbitrary",
- "bincode",
  "clap",
  "criterion",
  "fxhash",
  "heed",
- "rand",
  "rayon",
  "rkyv",
- "roaring",
- "serde",
- "serde_json",
  "unicode-segmentation",
 ]
 
@@ -689,15 +681,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ppv-lite86"
-version = "0.2.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
-dependencies = [
- "zerocopy",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.86"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -708,18 +691,18 @@ dependencies = [
 
 [[package]]
 name = "ptr_meta"
-version = "0.3.0-alpha.2"
+version = "0.3.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dadac7cbeb8c92c537db93956f32a3384ee5523b99d6866154866c54d176f56"
+checksum = "2c8bed447d11380c59eecf13a6c6d53df111a76ddf767f6012f6b764a8a6c34d"
 dependencies = [
  "ptr_meta_derive",
 ]
 
 [[package]]
 name = "ptr_meta_derive"
-version = "0.3.0-pre1"
+version = "0.3.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb26b4ec087a56688b4dddd8c7bbed38ad1867042ba6e1314162e5b370edaaac"
+checksum = "d7b08f257ab0714d74b6cbe157405bebd93fab6d2eea91f9df2482cb7a717621"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -737,8 +720,9 @@ dependencies = [
 
 [[package]]
 name = "rancor"
-version = "0.1.0-alpha.9"
-source = "git+https://github.com/rkyv/rancor.git#3b5406673867cba2525ac61a3e6eee25bacda96d"
+version = "0.1.0-alpha.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d13b5c362b6a79276452dd4ded19b36e8c6f03690e7c4d4ab5e58315606a1e8"
 dependencies = [
  "ptr_meta",
 ]
@@ -749,18 +733,6 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
- "libc",
- "rand_chacha",
- "rand_core",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-dependencies = [
- "ppv-lite86",
  "rand_core",
 ]
 
@@ -769,9 +741,6 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-dependencies = [
- "getrandom",
-]
 
 [[package]]
 name = "rayon"
@@ -824,17 +793,18 @@ checksum = "7a66a03ae7c801facd77a29370b4faec201768915ac14a721ba36f20bc9c209b"
 
 [[package]]
 name = "rend"
-version = "0.5.0-alpha.7"
+version = "0.5.0-alpha.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40500eb92db0cddd0bc4df4dcdf84ba5fa977862ccac93395caad6578cb98e5c"
+checksum = "72da4dca1311aef1f9aef10aa5756b21e54b379b5a10d95482d0c038a4d7c3c9"
 dependencies = [
  "bytecheck",
 ]
 
 [[package]]
 name = "rkyv"
-version = "0.8.0-alpha.2"
-source = "git+https://github.com/rkyv/rkyv.git#c63b783b66c4789ac225b95038b519b3f5bd6c58"
+version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "284fde3ced65cdb16f6a3cbad27c0292c3bdba6860b7ee2adb57b55b164d303b"
 dependencies = [
  "bytecheck",
  "bytes",
@@ -851,23 +821,13 @@ dependencies = [
 
 [[package]]
 name = "rkyv_derive"
-version = "0.8.0-alpha.2"
-source = "git+https://github.com/rkyv/rkyv.git#c63b783b66c4789ac225b95038b519b3f5bd6c58"
+version = "0.8.0-alpha.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bca443ef372feb64e7cc86afc44c38fcf3deb17ea4f0491b0b1ca1fa460083e"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "roaring"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f4b84ba6e838ceb47b41de5194a60244fac43d9fe03b71dbe8c5a201081d6d1"
-dependencies = [
- "bytemuck",
- "byteorder",
- "serde",
 ]
 
 [[package]]
@@ -1235,7 +1195,6 @@ version = "0.7.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9b4fd18abc82b8136838da5d50bae7bdea537c574d8dc1a34ed098d6c166f0"
 dependencies = [
- "byteorder",
  "zerocopy-derive",
 ]
 

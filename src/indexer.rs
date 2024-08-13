@@ -5,7 +5,6 @@ use std::{
 use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use rkyv::{api::high::HighSerializer, ser::{allocator::ArenaHandle}, util::AlignedVec, Archive, Deserialize, Serialize};
-use roaring::RoaringBitmap;
 
 use crate::{
     db::DB,

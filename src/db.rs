@@ -22,7 +22,6 @@ use heed::{
 use rkyv::{
     api::high::HighSerializer, ser::{allocator::ArenaHandle}, util::AlignedVec, vec::ArchivedVec, Archive, Deserialize, Serialize
 };
-use roaring::RoaringBitmap;
 
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},

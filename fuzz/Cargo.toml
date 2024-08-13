@@ -15,11 +15,6 @@ libfuzzer-sys = "0.4.7"
 [dependencies.phrase_search]
 path = ".."
 
-[patch.crates-io]
-rkyv = { git = "https://github.com/rkyv/rkyv.git", features = ["unaligned"] }
-bytecheck = { git = "https://github.com/rkyv/bytecheck.git" }
-rancor = { git = "https://github.com/rkyv/rancor.git" }
-
 [[bin]]
 name = "vp2intersect"
 path = "fuzz_targets/vp2intersect.rs"
