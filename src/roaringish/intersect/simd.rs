@@ -14,9 +14,11 @@ use super::{private::IntersectSeal, Intersect};
 
 #[cfg(all(
     target_feature = "avx512f",
-    target_feature = "avx512dq",
     target_feature = "avx512bw",
-    target_feature = "avx512vp2intersect"
+    target_feature = "avx512vl",
+    target_feature = "avx512vbmi2",
+    target_feature = "avx512dq",
+    target_feature = "avx512vp2intersect",
 ))]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
@@ -36,7 +38,14 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     (mask0, mask1)
 }
 
-#[cfg(all(target_feature = "avx512f", not(target_feature = "avx512vp2intersect")))]
+#[cfg(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vl",
+    target_feature = "avx512vbmi2",
+    target_feature = "avx512dq",
+    not(target_feature = "avx512vp2intersect"),
+))]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     use std::arch::x86_64::{
@@ -70,7 +79,13 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     return (mask0, mask1);
 }
 
-#[cfg(not(target_feature = "avx512f"))]
+#[cfg(not(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vl",
+    target_feature = "avx512vbmi2",
+    target_feature = "avx512dq",
+)))]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (Simd<u64, 4>, Simd<u64, 4>) {
     use std::arch::x86_64::{
@@ -99,7 +114,13 @@ unsafe fn vp2intersectq(a: __m256i, b: __m256i) -> (Simd<u64, 4>, Simd<u64, 4>) 
     (mask0.into(), mask1.into())
 }
 
-#[cfg(all(target_feature = "avx512f", target_feature = "avx512bw", target_feature = "avx512vl"))]
+#[cfg(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vl",
+    target_feature = "avx512vbmi2",
+    target_feature = "avx512dq",
+))]
 #[inline(always)]
 unsafe fn avx512_analyze_msb<L: Packed>(va: __m512i, a_positions: &[L::Position], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) 
 {
@@ -121,6 +142,13 @@ unsafe fn avx512_analyze_msb<L: Packed>(va: __m512i, a_positions: &[L::Position]
     *j += mask.count_ones() as usize;
 }
 
+#[cfg(not(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vl",
+    target_feature = "avx512vbmi2",
+    target_feature = "avx512dq",
+)))]
 #[inline(always)]
 unsafe fn simple_analyze_msb<const N: usize, L: Packed>(a: &[L::DocIdGroup], a_positions: &[L::Position], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) {
     let positions = unsafe { a_positions.get_unchecked(lhs_i..(lhs_i + N)) };
@@ -165,9 +193,21 @@ impl Intersect for SimdIntersect {
         };
         let mut rhs_positions_result: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(min);
 
-        #[cfg(target_feature = "avx512f")]
+        #[cfg(all(
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vl",
+            target_feature = "avx512vbmi2",
+            target_feature = "avx512dq",
+        ))]
         const N: usize = 8;
-        #[cfg(not(target_feature = "avx512f"))]
+        #[cfg(not(all(
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vl",
+            target_feature = "avx512vbmi2",
+            target_feature = "avx512dq",
+        )))]
         const N: usize = 4;
 
         let end_lhs = lhs_doc_id_groups.len() / N * N;
@@ -186,7 +226,13 @@ impl Intersect for SimdIntersect {
 
         while lhs_i < a.len() && rhs_i < b.len() {
             // --------------------- LOAD ---------------------
-            #[cfg(target_feature = "avx512f")]
+            #[cfg(all(
+                target_feature = "avx512f",
+                target_feature = "avx512bw",
+                target_feature = "avx512vl",
+                target_feature = "avx512vbmi2",
+                target_feature = "avx512dq",
+            ))]
             let (va, vb) = unsafe {
                 use std::arch::x86_64::_mm512_loadu_epi64;
                 let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
@@ -194,7 +240,13 @@ impl Intersect for SimdIntersect {
                 (va, vb)
             };
 
-            #[cfg(not(target_feature = "avx512f"))]
+            #[cfg(not(all(
+                target_feature = "avx512f",
+                target_feature = "avx512bw",
+                target_feature = "avx512vl",
+                target_feature = "avx512vbmi2",
+                target_feature = "avx512dq",
+            )))]
             let (va, vb) = unsafe {
                 use std::arch::x86_64::_mm256_loadu_si256;
                 let va = _mm256_loadu_si256(a.as_ptr().add(lhs_i) as *const _);
@@ -212,6 +264,7 @@ impl Intersect for SimdIntersect {
                 target_feature = "avx512bw",
                 target_feature = "avx512vl",
                 target_feature = "avx512vbmi2",
+                target_feature = "avx512dq",
             ))]
             unsafe {
                 use std::arch::x86_64::{
@@ -248,6 +301,7 @@ impl Intersect for SimdIntersect {
                 target_feature = "avx512bw",
                 target_feature = "avx512vl",
                 target_feature = "avx512vbmi2",
+                target_feature = "avx512dq",
             )))]
             {
                 let mut c = 0;
@@ -283,10 +337,22 @@ impl Intersect for SimdIntersect {
             if FIRST {
                 if last_a <= last_b {
                     unsafe {
-                        #[cfg(target_feature = "avx512f")]
-                        avx512_analyze_msb(va, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
+                        #[cfg(all(
+                            target_feature = "avx512f",
+                            target_feature = "avx512bw",
+                            target_feature = "avx512vl",
+                            target_feature = "avx512vbmi2",
+                            target_feature = "avx512dq",
+                        ))]
+                        avx512_analyze_msb::<L>(va, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
 
-                        #[cfg(not(target_feature = "avx512f"))]
+                        #[cfg(not(all(
+                            target_feature = "avx512f",
+                            target_feature = "avx512bw",
+                            target_feature = "avx512vl",
+                            target_feature = "avx512vbmi2",
+                            target_feature = "avx512dq",
+                        )))]
                         simple_analyze_msb::<N, L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
                     }
                     lhs_i += N;
@@ -300,14 +366,26 @@ impl Intersect for SimdIntersect {
 
         if FIRST {
             if need_to_analyze_msb && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len()) {
-                #[cfg(target_feature = "avx512f")]
+                #[cfg(all(
+                    target_feature = "avx512f",
+                    target_feature = "avx512bw",
+                    target_feature = "avx512vl",
+                    target_feature = "avx512vbmi2",
+                    target_feature = "avx512dq",
+                ))]
                 unsafe {
                     use std::arch::x86_64::_mm512_loadu_epi64;
                     let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
-                    avx512_analyze_msb(va, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
+                    avx512_analyze_msb::<L>(va, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
                 };
 
-                #[cfg(not(target_feature = "avx512f"))]
+                #[cfg(not(all(
+                    target_feature = "avx512f",
+                    target_feature = "avx512bw",
+                    target_feature = "avx512vl",
+                    target_feature = "avx512vbmi2",
+                    target_feature = "avx512dq",
+                )))]
                 unsafe {
                     simple_analyze_msb::<N, L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) 
                 };
