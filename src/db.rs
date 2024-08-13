@@ -109,14 +109,6 @@ impl Debug for Stats {
     }
 }
 
-#[derive(Debug)]
-pub struct ShardsInfo {
-    pub indexed_files: AHashSet<PathBuf>,
-    pub shards_with_error: AHashSet<PathBuf>,
-    pub shards_ok: AHashMap<u32, u32>,
-    pub next_shard_id: u32,
-    pub next_doc_id: u32,
-}
 
 pub struct DB<D>
 where
@@ -202,10 +194,6 @@ where
             common_tokens: AHashSet::new(),
         }
     }
-
-    // pub fn indexer<'a>(&'a self, docs_per_shard: Option<u32>) -> Indexer<'a, D> {
-    //     Indexer::new(self, docs_per_shard)
-    // }
 
     pub(crate) fn write_doc_id_to_document(
         &self,
