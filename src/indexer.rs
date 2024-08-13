@@ -1,9 +1,5 @@
 use std::{
-    cmp::Reverse,
-    collections::HashMap,
-    ops::{Deref, DerefMut},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU32, Ordering},
+    cell::Cell, cmp::Reverse, collections::HashMap, ops::{Deref, DerefMut}, path::{Path, PathBuf}, sync::atomic::{AtomicU32, Ordering}
 };
 
 use ahash::{AHashMap, HashMapExt, HashSetExt};
@@ -165,13 +161,12 @@ where
         self.doc_ids.push(doc_id);
         self.documents.push(doc);
 
-        let mut token_id_repr = Vec::new();
-        self.index_doc(content, doc_id, &mut token_id_repr);
-
+        let token_id_repr = self.index_doc(content, doc_id);
         self.token_id_reprs.push(token_id_repr);
     }
 
-    fn index_doc(&mut self, content: &str, doc_id: u32, token_id_repr: &mut Vec<u32>) {
+    fn index_doc(&mut self, content: &str, doc_id: u32) -> Vec<u32> {
+        let mut token_id_repr = Vec::new();
         let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
@@ -192,6 +187,7 @@ where
             self.token_id_to_pl[token_id as usize]
                 .push_unchecked(doc_id, Roaringish::from_positions_sorted(positions));
         }
+        token_id_repr
     }
 
     fn flush(
@@ -200,7 +196,10 @@ where
         db_size: usize,
         shard_id: u32,
         common_tokens: &Option<CommonTokens>,
-    ) -> DB<D> {
+    ) {
+        if self.doc_ids.is_empty() {
+            return;
+        }
         let b = std::time::Instant::now();
         let path = path.join(shard_id.to_string());
 
@@ -224,8 +223,6 @@ where
         rwtxn.commit().unwrap();
 
         println!("Flushed shard: {shard_id} in {:?}", b.elapsed());
-
-        db
     }
 
     fn generate_common_tokens(&mut self, common_tokens: &CommonTokens) -> FxHashSet<u32> {
@@ -310,7 +307,7 @@ where
     shard_db_size: usize,
     next_doc_id: u32,
     docs_per_shard: Option<u32>,
-    indexer: Option<InnerIndexer<D>>,
+    indexer: Cell<InnerIndexer<D>>,
     shards: Vec<DB<D>>,
     common_tokens: Option<CommonTokens>,
     avg_document_tokens: Option<u32>,
@@ -334,7 +331,7 @@ where
             shard_db_size,
             next_doc_id: 0,
             docs_per_shard,
-            indexer: Some(InnerIndexer::new(docs_per_shard, avg_document_tokens)),
+            indexer: Cell::new(InnerIndexer::new(docs_per_shard, avg_document_tokens)),
             shards: Vec::new(),
             common_tokens,
             avg_document_tokens,
@@ -348,24 +345,19 @@ where
             let doc_id = self.next_doc_id;
             self.next_doc_id += 1;
 
-            let indexer = self.indexer.get_or_insert_with(|| {
-                InnerIndexer::new(self.docs_per_shard, self.avg_document_tokens)
-            });
-            indexer.push(doc_id, content.as_ref(), doc);
+            self.indexer.get_mut().push(doc_id, content.as_ref(), doc);
 
             if let Some(docs_per_shard) = self.docs_per_shard {
                 if self.next_doc_id % docs_per_shard == 0 {
-                    // this should neve fail
-                    let indexer = self.indexer.take().unwrap();
+                    let indexer = self.indexer.replace(InnerIndexer::new(self.docs_per_shard, self.avg_document_tokens));
                     let b = std::time::Instant::now();
-                    let db = indexer.flush(
+                    indexer.flush(
                         self.path,
                         self.shard_db_size,
                         self.shards.len() as u32,
                         &self.common_tokens,
                     );
                     println!("Outter: {:?}", b.elapsed());
-                    self.shards.push(db);
                 }
             }
         }
@@ -373,22 +365,12 @@ where
         num_docs
     }
 
-    pub fn flush(mut self) -> Searcher<D> {
-        match self.indexer {
-            Some(indexer) => {
-                let b = std::time::Instant::now();
-                let db = indexer.flush(
-                    self.path,
-                    self.shard_db_size,
-                    self.shards.len() as u32,
-                    &self.common_tokens,
-                );
-                println!("Outter: {:?}", b.elapsed());
-                self.shards.push(db);
-            }
-            None => {}
-        }
-
-        Searcher { shards: self.shards.into_boxed_slice() }
+    pub fn flush(self) {
+        self.indexer.into_inner().flush(
+            self.path,
+            self.shard_db_size,
+            self.shards.len() as u32,
+            &self.common_tokens,
+        );
     }
 }
