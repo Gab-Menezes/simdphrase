@@ -150,8 +150,8 @@ unsafe fn avx512_analyze_msb<L: Packed>(va: __m512i, a_positions: &[L::Position]
     target_feature = "avx512dq",
 )))]
 #[inline(always)]
-unsafe fn simple_analyze_msb<const N: usize, L: Packed>(a: &[L::DocIdGroup], a_positions: &[L::Position], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) {
-    let positions = unsafe { a_positions.get_unchecked(lhs_i..(lhs_i + N)) };
+unsafe fn simple_analyze_msb<L: Packed>(a: &[L::DocIdGroup], a_positions: &[L::Position], lhs_i: usize, msb_doc_id_groups_result: &mut [MaybeUninit<u64>], j: &mut usize) {
+    let positions = unsafe { a_positions.get_unchecked(lhs_i..(lhs_i + 4)) };
 
     for (k, pos) in positions.into_iter().enumerate() {
         let doc_id_groups = unsafe { (*a.get_unchecked(lhs_i + k)).into() };
@@ -353,7 +353,7 @@ impl Intersect for SimdIntersect {
                             target_feature = "avx512vbmi2",
                             target_feature = "avx512dq",
                         )))]
-                        simple_analyze_msb::<N, L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
+                        simple_analyze_msb::<L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j);
                     }
                     lhs_i += N;
                 }
@@ -387,7 +387,7 @@ impl Intersect for SimdIntersect {
                     target_feature = "avx512dq",
                 )))]
                 unsafe {
-                    simple_analyze_msb::<N, L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) 
+                    simple_analyze_msb::<L>(a, a_positions, lhs_i, &mut msb_doc_id_groups_result, &mut j) 
                 };
             }
         }
