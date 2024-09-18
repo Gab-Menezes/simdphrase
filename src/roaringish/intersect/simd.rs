@@ -342,10 +342,10 @@ impl Intersect for SimdIntersect {
                                 .write((*doc_id_groups).into());
 
                             let a_position = *a_positions.get_unchecked(lhs_i + j);
-                            *a_temp.get_unchecked_mut(i + a_i) = a_position.into();
+                            *a_temp.get_unchecked_mut(a_i) = a_position.into();
 
-                            let b_positions = *b_positions.get_unchecked(rhs_i + j);
-                            *b_temp.get_unchecked_mut(i + b_i) = b_positions.into();
+                            let b_position = *b_positions.get_unchecked(rhs_i + j);
+                            *b_temp.get_unchecked_mut(b_i) = b_position.into();
                         }
 
                         a_i += (*a_r == u64::MAX) as usize;
@@ -364,15 +364,15 @@ impl Intersect for SimdIntersect {
                 } else {
                     for (j, b_r) in mask_b.as_array().iter().enumerate() {
                         unsafe {
-                            let doc_id_groups = a.get_unchecked(lhs_i + j);
+                            let doc_id_groups = b.get_unchecked(rhs_i + j);
                             doc_id_groups_result
                                 .get_unchecked_mut(i)
                                 .write((*doc_id_groups).into());
 
-                            let b_positions = b_positions.get_unchecked(rhs_i + j);
+                            let b_position = b_positions.get_unchecked(rhs_i + j);
                             positions_intersect
                                 .get_unchecked_mut(i)
-                                .write((*b_positions).into() & 1);
+                                .write((*b_position).into() & 1);
                         }
                         i += (*b_r == u64::MAX) as usize;
                     }
@@ -488,6 +488,8 @@ impl Intersect for SimdIntersect {
                             .get_unchecked_mut(j)
                             .write(lhs_doc_id_groups + 1);
                         j += (lhs & 0x8000 > 1) as usize;
+                    } else {
+                        positions_intersect.get_unchecked_mut(i).write(1 & rhs);
                     }
                 };
 

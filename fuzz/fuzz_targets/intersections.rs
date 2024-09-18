@@ -22,13 +22,12 @@ fuzz_target!(|r: (RoaringishPacked, RoaringishPacked)| {
     let rhs = BorrowRoaringishPacked::new(&r.1);
     
     let naive = NaiveIntersect::intersect::<true, _, _>(&lhs, &rhs);
-    // let unrolled_naive = UnrolledNaiveIntersect::intersect::<true>(&lhs, &rhs);
-    // let gallop = GallopIntersect::intersect::<true>(&lhs, &rhs);
-    // let simd_cmov = SimdIntersectCMOV::intersect::<true>(&lhs, &rhs);
     let simd = SimdIntersect::intersect::<true, _, _>(&lhs, &rhs);
 
-    // assert_eq!(naive, gallop);
-    // assert_eq!(naive, unrolled_naive);
-    // assert_eq!(naive, simd_cmov);
+    compare(&naive, &simd);
+
+    let naive = NaiveIntersect::intersect::<false, _, _>(&lhs, &rhs);
+    let simd = SimdIntersect::intersect::<false, _, _>(&lhs, &rhs);
+
     compare(&naive, &simd);
 });
