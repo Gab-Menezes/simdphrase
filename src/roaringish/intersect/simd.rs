@@ -75,7 +75,8 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
     let m0 = m00 | m10 | m20 | m30;
     let m1 = m01 | m11 | m21 | m31;
     let mask1 = m0 | ((0x55 & m1) << 1) | ((m1 >> 1) & 0x55);
-    return (mask0, mask1);
+
+    (mask0, mask1)
 }
 
 #[cfg(not(all(

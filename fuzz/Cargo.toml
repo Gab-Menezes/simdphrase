@@ -34,4 +34,9 @@ debug = true
 codegen-units = 1
 panic = "abort"
 incremental = false
-rustflags = ["-C", "target-cpu=native", "-Z", "tune-cpu=native"]
+rustflags = [
+    "-C", "target-cpu=native", 
+    "-Z", "tune-cpu=native",
+    # "-C", "target-feature=-avx512f",
+    "-C", "target-feature=-avx512vp2intersect",
+]
