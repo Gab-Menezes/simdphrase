@@ -12,6 +12,7 @@
 #![feature(portable_simd)]
 #![feature(stdarch_x86_avx512)]
 #![feature(avx512_target_feature)]
+#![feature(maybe_uninit_uninit_array)]
 
 mod indexer;
 mod db;

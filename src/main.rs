@@ -85,7 +85,7 @@ struct Search {
 
 fn search<D: Send + Sync>(args: Search)
 where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {

@@ -13,7 +13,7 @@ use crate::{roaringish::intersect::Intersect, Stats, DB};
 
 pub struct Searcher<D>
 where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive,
 {
     pub(crate) shards: Box<[DB<D>]>,
@@ -21,7 +21,7 @@ where
 
 impl<D> Searcher<D>
 where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {
@@ -64,7 +64,7 @@ where
 
 impl<D> Searcher<D>
 where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + Send
         + Sync

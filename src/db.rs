@@ -111,7 +111,7 @@ impl Debug for Stats {
 
 pub struct DB<D>
 where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive,
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive,
 {
     pub(crate) env: Env,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
@@ -124,18 +124,18 @@ where
 }
 
 unsafe impl<D> Send for DB<D> where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Send
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Send
 {
 }
 
 unsafe impl<D> Sync for DB<D> where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Sync
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Sync
 {
 }
 
 impl<D> DB<D>
 where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {
@@ -253,7 +253,7 @@ where
 
 impl<D> DB<D>
 where
-    D: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {

@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    pl::{PostingList},
+    pl::PostingList,
     Stats,
 };
 
@@ -25,7 +25,6 @@ use self::intersect::Intersect;
 // use self::intersect::Intersect;
 
 #[derive(Default, Serialize, Deserialize, Archive)]
-#[archive_attr(derive(Debug))]
 pub struct Roaringish {
     pub(crate) inner: Vec<u32>,
 }
@@ -433,41 +432,16 @@ pub trait Packed {
         let lhs = BorrowRoaringishPacked::new(self);
         let rhs = BorrowRoaringishPacked::new(rhs);
         let b = std::time::Instant::now();
-        let (doc_id_groups, lhs_positions, rhs_positions, msb_doc_id_groups) = I::intersect::<true, _, R>(&lhs, &rhs);
+        let (doc_id_groups, positions_intersect, msb_doc_id_groups) = I::intersect::<true, _, R>(&lhs, &rhs);
         stats
             .first_gallop
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let msb_packed = BorrowRoaringishPacked::<RoaringishPacked>::from_raw(&msb_doc_id_groups, &[]);
         let b = std::time::Instant::now();
-        let (msb_doc_id_groups, _, msb_rhs_positions, _) = I::intersect::<false, RoaringishPacked, R>(&msb_packed, &rhs);
-
+        let (msb_doc_id_groups, msb_positions_intersect, _) = I::intersect::<false, RoaringishPacked, R>(&msb_packed, &rhs);
         stats
             .second_gallop
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-        unsafe {
-            assume(doc_id_groups.len() == lhs_positions.len());
-            assume(doc_id_groups.len() == rhs_positions.len());
-
-            assume(msb_doc_id_groups.len() == msb_rhs_positions.len());
-        };
-
-        let b = std::time::Instant::now();
-        let positions_intersect: Box<[u16]> = lhs_positions
-            .iter()
-            .zip(rhs_positions.iter())
-            .map(|(lhs, rhs)| (lhs << 1) & rhs)
-            .collect();
-        stats
-            .first_intersect
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-        let b = std::time::Instant::now();
-        let msb_positions_intersect: Box<[u16]> =
-            msb_rhs_positions.iter().map(|rhs| 1 & rhs).collect();
-        stats
-            .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();

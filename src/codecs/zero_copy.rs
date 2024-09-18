@@ -10,12 +10,12 @@ use rkyv::{
 
 pub struct ZeroCopyCodec<T>(PhantomData<T>)
 where
-    T: for<'a> Serialize<HighSerializer<'a, AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    T: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive;
 
 impl<'a, T> heed::BytesEncode<'a> for ZeroCopyCodec<T>
 where
-    T: for<'b> Serialize<HighSerializer<'b, AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
+    T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
         + Archive
         + 'a,
 {
@@ -29,7 +29,7 @@ where
 
 impl<'a, T> heed::BytesDecode<'a> for ZeroCopyCodec<T>
 where
-    T: for<'b> Serialize<HighSerializer<'b, AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
+    T: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
         + Archive
         + 'a,
 {

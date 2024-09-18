@@ -10,5 +10,5 @@ mod private {
 }
 
 pub trait Intersect: private::IntersectSeal {
-    fn intersect<const FIRST: bool, L: Packed, R: Packed>(lhs: &BorrowRoaringishPacked<L>, rhs: &BorrowRoaringishPacked<R>) -> (Vec<u64>, Vec<u16>, Vec<u16>, Vec<u64>);
+    fn intersect<const FIRST: bool, L: Packed, R: Packed>(lhs: &BorrowRoaringishPacked<L>, rhs: &BorrowRoaringishPacked<R>) -> (Vec<u64>, Vec<u16>, Vec<u64>);
 }
