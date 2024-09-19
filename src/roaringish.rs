@@ -434,14 +434,14 @@ pub trait Packed {
         let b = std::time::Instant::now();
         let (doc_id_groups, positions_intersect, msb_doc_id_groups) = I::intersect::<true, _, R>(&lhs, &rhs);
         stats
-            .first_gallop
+            .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let msb_packed = BorrowRoaringishPacked::<RoaringishPacked>::from_raw(&msb_doc_id_groups, &[]);
         let b = std::time::Instant::now();
         let (msb_doc_id_groups, msb_positions_intersect, _) = I::intersect::<false, RoaringishPacked, R>(&msb_packed, &rhs);
         stats
-            .second_gallop
+            .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();

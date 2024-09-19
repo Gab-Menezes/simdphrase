@@ -37,9 +37,6 @@ pub struct Stats {
     pub normalize_tokenize: AtomicU64,
     pub merge: AtomicU64,
     pub get_pls: AtomicU64,
-    pub first_gallop: AtomicU64,
-    pub add_one_group: AtomicU64,
-    pub second_gallop: AtomicU64,
     pub first_intersect: AtomicU64,
     pub second_intersect: AtomicU64,
     pub first_result: AtomicU64,
@@ -53,9 +50,6 @@ impl Debug for Stats {
         let sum = 
             self.normalize_tokenize.load(Relaxed) +
             self.merge.load(Relaxed) +
-            self.first_gallop.load(Relaxed) +
-            self.add_one_group.load(Relaxed) +
-            self.second_gallop.load(Relaxed) +
             self.first_intersect.load(Relaxed) +
             self.second_intersect.load(Relaxed) +
             self.first_result.load(Relaxed) +
@@ -68,11 +62,8 @@ impl Debug for Stats {
         let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64;
         let merge = self.merge.load(Relaxed) as f64 / sum as f64;
         // let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
-        let first_gallop = self.first_gallop.load(Relaxed) as f64 / sum as f64;
-        let add_one_group = self.add_one_group.load(Relaxed) as f64 / sum as f64;
-        let second_gallop = self.second_gallop.load(Relaxed) as f64 / sum as f64;
-        let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64;
-        let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64;
+        let first_gallop = self.first_intersect.load(Relaxed) as f64 / sum as f64;
+        let second_gallop = self.second_intersect.load(Relaxed) as f64 / sum as f64;
         let first_result = self.first_result.load(Relaxed) as f64 / sum as f64;
         let second_result = self.second_result.load(Relaxed) as f64 / sum as f64;
         let add_lhs = self.add_lhs.load(Relaxed) as f64 / sum as f64;
@@ -81,11 +72,8 @@ impl Debug for Stats {
         let pl_normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum_pl as f64;
         let pl_merge = self.merge.load(Relaxed) as f64 / sum_pl as f64;
         let pl_get_pls = self.get_pls.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_first_gallop = self.first_gallop.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_add_one_group = self.add_one_group.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_second_gallop = self.second_gallop.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_first_intersect = self.first_intersect.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_second_intersect = self.second_intersect.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_first_gallop = self.first_intersect.load(Relaxed) as f64 / sum_pl as f64;
+        let pl_second_gallop = self.second_intersect.load(Relaxed) as f64 / sum_pl as f64;
         let pl_first_result = self.first_result.load(Relaxed) as f64 / sum_pl as f64;
         let pl_second_result = self.second_result.load(Relaxed) as f64 / sum_pl as f64;
         let pl_add_lhs = self.add_lhs.load(Relaxed) as f64 / sum_pl as f64;
@@ -95,11 +83,8 @@ impl Debug for Stats {
             .field("normalize_tokenize", &format_args!("({:.3}ms, {normalize_tokenize:.3}%, {pl_normalize_tokenize:.3}%)", self.normalize_tokenize.load(Relaxed) as f64 / 1000f64))
             .field("merge", &format_args!("({:.3}ms, {merge:.3}%, {pl_merge:.3}%)", self.merge.load(Relaxed) as f64 / 1000f64))
             .field("get_pls", &format_args!("({:.3}ms, _%, {pl_get_pls:.3}%)", self.get_pls.load(Relaxed) as f64 / 1000f64))
-            .field("first_gallop", &format_args!("({:.3}ms, {first_gallop:.3}%, {pl_first_gallop:.3}%)", self.first_gallop.load(Relaxed) as f64 / 1000f64))
-            .field("add_one_group", &format_args!("({:.3}ms, {add_one_group:.3}%, {pl_add_one_group:.3}%)", self.add_one_group.load(Relaxed) as f64 / 1000f64))
-            .field("second_gallop", &format_args!("({:.3}ms, {second_gallop:.3}%, {pl_second_gallop:.3}%)", self.second_gallop.load(Relaxed) as f64 / 1000f64))
-            .field("first_intersect", &format_args!("({:.3}ms, {first_intersect:.3}%, {pl_first_intersect:.3}%)", self.first_intersect.load(Relaxed) as f64 / 1000f64))
-            .field("second_intersect", &format_args!("({:.3}ms, {second_intersect:.3}%, {pl_second_intersect:.3}%)", self.second_intersect.load(Relaxed) as f64 / 1000f64))
+            .field("first_intersect", &format_args!("({:.3}ms, {first_gallop:.3}%, {pl_first_gallop:.3}%)", self.first_intersect.load(Relaxed) as f64 / 1000f64))
+            .field("second_intersect", &format_args!("({:.3}ms, {second_gallop:.3}%, {pl_second_gallop:.3}%)", self.second_intersect.load(Relaxed) as f64 / 1000f64))
             .field("first_result", &format_args!("({:.3}ms, {first_result:.3}%, {pl_first_result:.3}%)", self.first_result.load(Relaxed) as f64 / 1000f64))
             .field("second_result", &format_args!("({:.3}ms, {second_result:.3}%, {pl_second_result:.3}%)", self.second_result.load(Relaxed) as f64 / 1000f64))
             .field("add_lhs", &format_args!("({:.3}ms, {add_lhs:.3}%, {pl_add_lhs:.3}%)", self.add_lhs.load(Relaxed) as f64 / 1000f64))
