@@ -38,5 +38,5 @@ rustflags = [
     "-C", "target-cpu=native", 
     "-Z", "tune-cpu=native",
     # "-C", "target-feature=-avx512f",
-    "-C", "target-feature=-avx512vp2intersect",
+    # "-C", "target-feature=-avx512vp2intersect",
 ]
