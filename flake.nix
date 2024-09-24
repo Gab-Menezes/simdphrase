@@ -45,6 +45,5 @@
 
         LD_LIBRARY_PATH = libPath;
       };
-      inherit pkgs;
     };
 }
