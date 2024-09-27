@@ -1,27 +1,19 @@
 use std::{
-    cell::UnsafeCell,
-    cmp::Reverse,
     collections::BTreeSet,
-    fmt::{Debug, Display},
-    fs::{DirEntry, OpenOptions},
-    io::{Error, Write},
-    iter::{Peekable, Zip},
-    path::{Path, PathBuf},
-    slice::Iter,
-    str::FromStr,
-    sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
+    fmt::Debug,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
 };
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
 use fxhash::{FxHashMap, FxHashSet};
 use heed::{
-    byteorder::{BigEndian, LittleEndian},
-    types::{Str, U32},
+    types::Str,
     Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
 };
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, vec::ArchivedVec,
-    Archive, Deserialize, Serialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec,
+    Archive, Serialize,
 };
 
 use crate::{
@@ -185,15 +177,15 @@ where
         + 'static,
 {
     pub fn truncate(path: &Path, db_size: usize) -> Self {
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
+        let _ = std::fs::remove_dir_all(path);
+        std::fs::create_dir_all(path).unwrap();
 
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(5)
                 .map_size(db_size)
                 .flags(EnvFlags::WRITE_MAP | EnvFlags::MAP_ASYNC)
-                .open(&path)
+                .open(path)
                 .unwrap()
         };
 
@@ -247,7 +239,7 @@ where
     ) {
         for (doc_id, document) in doc_ids.iter().zip(documents.iter()) {
             self.db_doc_id_to_document
-                .put_with_flags(rwtxn, PutFlags::APPEND, &doc_id, &document)
+                .put_with_flags(rwtxn, PutFlags::APPEND, doc_id, document)
                 .unwrap();
         }
     }
@@ -261,7 +253,7 @@ where
         token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
         for (token, token_id) in token_to_token_id.iter() {
             self.db_token_to_token_id
-                .put_with_flags(rwtxn, PutFlags::APPEND, &token, &token_id)
+                .put_with_flags(rwtxn, PutFlags::APPEND, token, token_id)
                 .unwrap();
         }
     }
@@ -294,7 +286,7 @@ where
 
         for (token_id, token) in token_id_to_token.iter() {
             self.db_common_token_id_to_token
-                .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, token)
+                .put_with_flags(rwtxn, PutFlags::APPEND, token_id, token)
                 .unwrap();
         }
     }
@@ -312,7 +304,7 @@ where
                 .max_dbs(5)
                 .map_size(db_size)
                 .flags(EnvFlags::READ_ONLY)
-                .open(&path)
+                .open(path)
                 .unwrap()
         };
 
@@ -396,7 +388,7 @@ where
             }
 
             for chunk in sequence.chunks(MAX_SEQ_LEN) {
-                let token: String = chunk.into_iter().map(|t| *t).intersperse(" ").collect();
+                let token: String = chunk.iter().copied().intersperse(" ").collect();
                 final_tokens.push((token, chunk.len() as u32));
             }
 
@@ -406,7 +398,7 @@ where
 
         if sequence.len() > 1 {
             for chunk in sequence.chunks(MAX_SEQ_LEN) {
-                let token: String = chunk.into_iter().map(|t| *t).intersperse(" ").collect();
+                let token: String = chunk.iter().copied().intersperse(" ").collect();
                 final_tokens.push((token, chunk.len() as u32));
             }
         } else {
@@ -418,7 +410,7 @@ where
 
     #[inline(always)]
     pub(crate) fn single_token_search(&self, rotxn: &RoTxn, token: &str) -> Vec<u32> {
-        let Some(token_id) = self.db_token_to_token_id.get(&rotxn, token).unwrap() else {
+        let Some(token_id) = self.db_token_to_token_id.get(rotxn, token).unwrap() else {
             return Vec::new();
         };
 
@@ -458,7 +450,7 @@ where
     pub(crate) fn get_token_id(&self, rotxn: &RoTxn, token: &str) -> Option<u32> {
         unsafe {
             self.db_token_to_token_id
-                .get(&rotxn, token)
+                .get(rotxn, token)
                 .unwrap_unchecked()
         }
     }
@@ -471,7 +463,7 @@ where
     ) -> &'a ArchivedRoaringishPacked {
         unsafe {
             self.db_token_id_to_roaringish_packed
-                .get(&rotxn, &token_id)
+                .get(rotxn, &token_id)
                 .unwrap_unchecked()
                 .unwrap_unchecked()
         }
@@ -485,7 +477,7 @@ where
             .normalize_tokenize
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        if tokens.len() == 0 {
+        if tokens.is_empty() {
             return Vec::new();
         }
 

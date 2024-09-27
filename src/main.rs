@@ -4,37 +4,23 @@
 #![feature(avx512_target_feature)]
 #![feature(stdarch_x86_avx512)]
 
-use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use phrase_search::{
-    naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, BorrowRoaringishPacked,
-    CommonTokens, Indexer, Intersect, RoaringishPacked, Searcher, Stats,
+    naive::NaiveIntersect,
+    CommonTokens, Indexer, Searcher, Stats,
 };
-use rayon::{
-    iter::{IntoParallelRefIterator, ParallelIterator},
-    slice::ParallelSlice,
-};
+use rayon::iter::ParallelIterator;
 use rkyv::{
-    api::high::HighSerializer, rend::unaligned::u16_ule, ser::allocator::ArenaHandle,
-    util::AlignedVec, Archive, Deserialize, Serialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle,
+    util::AlignedVec, Archive, Serialize,
 };
 use std::{
-    arch::{
-        asm,
-        x86_64::{__m512i, __mmask8, _mm512_loadu_epi64},
-    },
-    fmt::{Debug, Display},
+    fmt::Debug,
     fs::File,
-    hint::black_box,
     io::{BufRead, BufReader},
-    iter::Map,
-    mem::MaybeUninit,
     path::PathBuf,
-    process::{Command, Stdio},
-    simd::{cmp::SimdPartialEq, u64x8, Mask, Simd},
-    sync::atomic::{AtomicU32, Ordering::Relaxed},
 };
 
 #[derive(Parser, Debug)]
@@ -129,7 +115,7 @@ where
             sum_micros += b.elapsed().as_micros();
             res = res.max(doc_ids.len());
         }
-        let avg_ms = sum_micros as f64 / args.runs as f64 / 1000 as f64;
+        let avg_ms = sum_micros as f64 / args.runs as f64 / 1000_f64;
         println!("query: {q:?} took {avg_ms:.4} ms/iter ({res} results found)");
         println!("{stats:#?}");
     }

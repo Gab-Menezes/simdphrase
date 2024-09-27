@@ -5,13 +5,11 @@ use rkyv::{Archive, Deserialize, Serialize};
 #[allow(unused_imports)]
 use std::arch::x86_64::{__m256i, __m512i};
 use std::marker::PhantomData;
-use std::simd::cmp::SimdPartialOrd;
 use std::{
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
     mem::MaybeUninit,
     ops::Add,
-    simd::{cmp::SimdPartialEq, Mask, Simd},
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -71,15 +69,14 @@ impl Display for Roaringish {
         let it = self
             .inner
             .iter()
-            .map(|packed| {
+            .flat_map(|packed| {
                 let group = get_group(*packed);
                 let encoded_values = get_encoded_positions(*packed);
                 let s = group * 16;
                 (0..16u32)
                     .filter_map(move |i| ((encoded_values >> i) & 1 == 1).then_some(i))
                     .map(move |i| s + i)
-            })
-            .flatten();
+            });
 
         f.debug_list().entries(it).finish()
     }
@@ -362,7 +359,7 @@ impl Add<u32> for &ArchivedRoaringishPacked {
         let mask = u16::MAX << rhs;
         let bits_to_check = !mask;
         for (doc_id_group, values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
-            let new_positions = values.to_native().rotate_left(rhs as u32);
+            let new_positions = values.to_native().rotate_left(rhs);
             let postions_current_group = new_positions & mask;
             let postions_new_group = new_positions & bits_to_check;
             if postions_current_group > 0 {
@@ -412,7 +409,7 @@ impl Add<u32> for &RoaringishPacked {
         let mask = u16::MAX << rhs;
         let bits_to_check = !mask;
         for (doc_id_group, values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
-            let new_positions = values.rotate_left(rhs as u32);
+            let new_positions = values.rotate_left(rhs);
             let postions_current_group = new_positions & mask;
             let postions_new_group = new_positions & bits_to_check;
             if postions_current_group > 0 {
@@ -668,15 +665,14 @@ impl Display for RoaringishPacked {
             .doc_id_groups
             .iter()
             .zip(self.positions.iter())
-            .map(|(doc_id_group, encoded_values)| {
+            .flat_map(|(doc_id_group, encoded_values)| {
                 let doc_id = get_doc_id(*doc_id_group);
                 let group = get_group_from_doc_id_group(*doc_id_group);
                 let s = group * 16;
                 (0..16u32)
                     .filter_map(move |i| ((encoded_values >> i) & 1 == 1).then_some(i))
                     .map(move |i| (doc_id, s + i))
-            })
-            .flatten();
+            });
         f.debug_list().entries(it).finish()
     }
 }
@@ -689,13 +685,10 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
         doc_id_groups.sort_unstable();
         doc_id_groups.dedup();
 
-        match doc_id_groups.last().copied() {
-            Some(v) => {
-                if v == u64::MAX {
-                    doc_id_groups.pop();
-                }
+        if let Some(v) = doc_id_groups.last().copied() {
+            if v == u64::MAX {
+                doc_id_groups.pop();
             }
-            None => {}
         }
 
         let positions: Result<Vec<u16>, _> =

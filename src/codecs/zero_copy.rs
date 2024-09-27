@@ -2,8 +2,7 @@ use std::{borrow::Cow, marker::PhantomData};
 
 use rkyv::{
     api::high::HighSerializer,
-    rancor::{Error, Fallible},
-    ser::{allocator::ArenaHandle, Serializer},
+    ser::allocator::ArenaHandle,
     util::AlignedVec,
     Archive, Archived, Serialize,
 };

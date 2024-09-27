@@ -1,24 +1,20 @@
 use std::{
     cell::Cell,
     cmp::Reverse,
-    collections::HashMap,
-    ops::{Deref, DerefMut},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU32, Ordering},
+    path::Path,
 };
 
 use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Deserialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive,
     Serialize,
 };
 
 use crate::{
     db::DB,
-    roaringish::{Roaringish, RoaringishPackedBuilder, MAX_VALUE},
+    roaringish::{RoaringishPackedBuilder, MAX_VALUE},
     utils::{normalize, tokenize, MAX_SEQ_LEN},
-    Searcher,
 };
 
 const TOKEN_ID_TOO_LONG: u32 = u32::MAX;
@@ -282,7 +278,7 @@ where
             sequence.clear();
             let mut begin_pos = 0;
             for (pos, token_id) in token_id_repr.iter().enumerate() {
-                if common_token_ids.contains(&token_id) {
+                if common_token_ids.contains(token_id) {
                     sequence.push(*token_id);
                     continue;
                 }
@@ -329,7 +325,7 @@ where
         }
 
         println!("after: {}", self.token_id_to_builder.len());
-        return common_token_ids;
+        common_token_ids
     }
 }
 

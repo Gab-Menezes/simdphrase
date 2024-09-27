@@ -1,11 +1,8 @@
-use std::{
-    fmt::{Debug, Display},
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Deserialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive,
     Serialize,
 };
 
@@ -40,8 +37,7 @@ where
     pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
         self.shards
             .iter()
-            .map(|shard| shard.search::<I>(q, stats))
-            .flatten()
+            .flat_map(|shard| shard.search::<I>(q, stats))
             .collect()
     }
 

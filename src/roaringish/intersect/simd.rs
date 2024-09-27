@@ -166,7 +166,7 @@ unsafe fn simple_analyze_msb<L: Packed>(
 ) {
     let positions = unsafe { a_positions.get_unchecked(lhs_i..(lhs_i + 4)) };
 
-    for (k, pos) in positions.into_iter().enumerate() {
+    for (k, pos) in positions.iter().enumerate() {
         let doc_id_groups = unsafe { (*a.get_unchecked(lhs_i + k)).into() };
         unsafe {
             msb_doc_id_groups_result
@@ -426,46 +426,42 @@ impl Intersect for SimdIntersect {
             need_to_analyze_msb = last_b < last_a;
         }
 
-        if FIRST {
-            if need_to_analyze_msb
-                && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len())
-            {
-                #[cfg(all(
-                    target_feature = "avx512f",
-                    target_feature = "avx512bw",
-                    target_feature = "avx512vl",
-                    target_feature = "avx512vbmi2",
-                    target_feature = "avx512dq",
-                ))]
-                unsafe {
-                    use std::arch::x86_64::_mm512_loadu_epi64;
-                    let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
-                    avx512_analyze_msb::<L>(
-                        va,
-                        a_positions,
-                        lhs_i,
-                        &mut msb_doc_id_groups_result,
-                        &mut j,
-                    );
-                };
+        if FIRST && need_to_analyze_msb && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len()) {
+            #[cfg(all(
+                target_feature = "avx512f",
+                target_feature = "avx512bw",
+                target_feature = "avx512vl",
+                target_feature = "avx512vbmi2",
+                target_feature = "avx512dq",
+            ))]
+            unsafe {
+                use std::arch::x86_64::_mm512_loadu_epi64;
+                let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
+                avx512_analyze_msb::<L>(
+                    va,
+                    a_positions,
+                    lhs_i,
+                    &mut msb_doc_id_groups_result,
+                    &mut j,
+                );
+            };
 
-                #[cfg(not(all(
-                    target_feature = "avx512f",
-                    target_feature = "avx512bw",
-                    target_feature = "avx512vl",
-                    target_feature = "avx512vbmi2",
-                    target_feature = "avx512dq",
-                )))]
-                unsafe {
-                    simple_analyze_msb::<L>(
-                        a,
-                        a_positions,
-                        lhs_i,
-                        &mut msb_doc_id_groups_result,
-                        &mut j,
-                    )
-                };
-            }
+            #[cfg(not(all(
+                target_feature = "avx512f",
+                target_feature = "avx512bw",
+                target_feature = "avx512vl",
+                target_feature = "avx512vbmi2",
+                target_feature = "avx512dq",
+            )))]
+            unsafe {
+                simple_analyze_msb::<L>(
+                    a,
+                    a_positions,
+                    lhs_i,
+                    &mut msb_doc_id_groups_result,
+                    &mut j,
+                )
+            };
         }
 
         // for the remaining elements we can do a 2 pointer approach
