@@ -34,6 +34,7 @@
           pkgs.cargo-flamegraph
           pkgs.cargo-valgrind
           pkgs.cargo-fuzz
+          pkgs.cargo-pgo
 
           pkgs.rust-analyzer-nightly
           pkgs.openssl
@@ -41,6 +42,7 @@
 
           pkgs.clang_19
           pkgs.llvmPackages_19.bintools
+          pkgs.bolt_19
         ];
 
         #LD_LIBRARY_PATH = libPath;
