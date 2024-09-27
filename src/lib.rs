@@ -1,8 +1,6 @@
 #![feature(hash_raw_entry)]
 #![feature(array_windows)]
 #![feature(iter_intersperse)]
-#![feature(new_uninit)]
-#![feature(hint_assert_unchecked)]
 #![feature(core_intrinsics)]
 #![feature(debug_closure_helpers)]
 #![feature(maybe_uninit_fill)]

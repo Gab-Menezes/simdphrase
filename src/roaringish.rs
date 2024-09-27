@@ -2,8 +2,6 @@ pub mod intersect;
 
 use arbitrary::{Arbitrary, Unstructured};
 use rkyv::{Archive, Deserialize, Serialize};
-#[allow(unused_imports)]
-use std::arch::x86_64::{__m256i, __m512i};
 use std::marker::PhantomData;
 use std::{
     fmt::{Binary, Debug, Display},
@@ -16,8 +14,6 @@ use std::{
 use crate::Stats;
 
 use self::intersect::Intersect;
-
-// use self::intersect::Intersect;
 
 #[derive(Default, Serialize, Deserialize, Archive)]
 pub struct Roaringish {
@@ -522,7 +518,7 @@ pub trait Packed {
 
                     if write {
                         // in this case no bit was set in the intersection,
-                        // so we can just or the new value with the previous one
+                        // so we can just `or` the new value with the previous one
                         let r = r_positions.get_unchecked_mut(r_i - 1).assume_init();
                         r_positions
                             .get_unchecked_mut(r_i - 1)
