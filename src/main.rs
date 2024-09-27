@@ -8,13 +8,17 @@ use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{naive::NaiveIntersect, normalize, tokenize, simd::SimdIntersect, BorrowRoaringishPacked, CommonTokens, Indexer, Intersect, RoaringishPacked, Searcher, Stats};
+use phrase_search::{
+    naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, BorrowRoaringishPacked,
+    CommonTokens, Indexer, Intersect, RoaringishPacked, Searcher, Stats,
+};
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
     slice::ParallelSlice,
 };
 use rkyv::{
-    api::high::HighSerializer, rend::unaligned::u16_ule, ser::{allocator::ArenaHandle}, util::AlignedVec, Archive, Deserialize, Serialize
+    api::high::HighSerializer, rend::unaligned::u16_ule, ser::allocator::ArenaHandle,
+    util::AlignedVec, Archive, Deserialize, Serialize,
 };
 use std::{
     arch::{

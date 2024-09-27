@@ -20,13 +20,17 @@ use heed::{
     Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
 };
 use rkyv::{
-    api::high::HighSerializer, ser::{allocator::ArenaHandle}, util::AlignedVec, vec::ArchivedVec, Archive, Deserialize, Serialize
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, vec::ArchivedVec,
+    Archive, Deserialize, Serialize,
 };
 
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    roaringish::{intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked, RoaringishPackedBuilder},
+    roaringish::{
+        intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked,
+        RoaringishPackedBuilder,
+    },
     tokenize,
     utils::MAX_SEQ_LEN,
 };
@@ -46,15 +50,14 @@ pub struct Stats {
 
 impl Debug for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sum = 
-            self.normalize_tokenize.load(Relaxed) +
-            self.merge.load(Relaxed) +
-            self.first_intersect.load(Relaxed) +
-            self.second_intersect.load(Relaxed) +
-            self.first_result.load(Relaxed) +
-            self.second_result.load(Relaxed) +
-            self.add_lhs.load(Relaxed) +
-            self.add_rhs.load(Relaxed);
+        let sum = self.normalize_tokenize.load(Relaxed)
+            + self.merge.load(Relaxed)
+            + self.first_intersect.load(Relaxed)
+            + self.second_intersect.load(Relaxed)
+            + self.first_result.load(Relaxed)
+            + self.second_result.load(Relaxed)
+            + self.add_lhs.load(Relaxed)
+            + self.add_rhs.load(Relaxed);
 
         let sum_pl = sum + self.get_pls.load(Relaxed);
 
@@ -79,23 +82,77 @@ impl Debug for Stats {
         let pl_add_rhs = self.add_rhs.load(Relaxed) as f64 / sum_pl as f64;
 
         f.debug_struct("Stats")
-            .field("normalize_tokenize", &format_args!("({:.3}ms, {normalize_tokenize:.3}%, {pl_normalize_tokenize:.3}%)", self.normalize_tokenize.load(Relaxed) as f64 / 1000f64))
-            .field("merge", &format_args!("({:.3}ms, {merge:.3}%, {pl_merge:.3}%)", self.merge.load(Relaxed) as f64 / 1000f64))
-            .field("get_pls", &format_args!("({:.3}ms, _%, {pl_get_pls:.3}%)", self.get_pls.load(Relaxed) as f64 / 1000f64))
-            .field("first_intersect", &format_args!("({:.3}ms, {first_gallop:.3}%, {pl_first_gallop:.3}%)", self.first_intersect.load(Relaxed) as f64 / 1000f64))
-            .field("second_intersect", &format_args!("({:.3}ms, {second_gallop:.3}%, {pl_second_gallop:.3}%)", self.second_intersect.load(Relaxed) as f64 / 1000f64))
-            .field("first_result", &format_args!("({:.3}ms, {first_result:.3}%, {pl_first_result:.3}%)", self.first_result.load(Relaxed) as f64 / 1000f64))
-            .field("second_result", &format_args!("({:.3}ms, {second_result:.3}%, {pl_second_result:.3}%)", self.second_result.load(Relaxed) as f64 / 1000f64))
-            .field("add_lhs", &format_args!("({:.3}ms, {add_lhs:.3}%, {pl_add_lhs:.3}%)", self.add_lhs.load(Relaxed) as f64 / 1000f64))
-            .field("add_rhs", &format_args!("({:.3}ms, {add_rhs:.3}%, {pl_add_rhs:.3}%)", self.add_rhs.load(Relaxed) as f64 / 1000f64))
+            .field(
+                "normalize_tokenize",
+                &format_args!(
+                    "({:.3}ms, {normalize_tokenize:.3}%, {pl_normalize_tokenize:.3}%)",
+                    self.normalize_tokenize.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "merge",
+                &format_args!(
+                    "({:.3}ms, {merge:.3}%, {pl_merge:.3}%)",
+                    self.merge.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "get_pls",
+                &format_args!(
+                    "({:.3}ms, _%, {pl_get_pls:.3}%)",
+                    self.get_pls.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "first_intersect",
+                &format_args!(
+                    "({:.3}ms, {first_gallop:.3}%, {pl_first_gallop:.3}%)",
+                    self.first_intersect.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "second_intersect",
+                &format_args!(
+                    "({:.3}ms, {second_gallop:.3}%, {pl_second_gallop:.3}%)",
+                    self.second_intersect.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "first_result",
+                &format_args!(
+                    "({:.3}ms, {first_result:.3}%, {pl_first_result:.3}%)",
+                    self.first_result.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "second_result",
+                &format_args!(
+                    "({:.3}ms, {second_result:.3}%, {pl_second_result:.3}%)",
+                    self.second_result.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "add_lhs",
+                &format_args!(
+                    "({:.3}ms, {add_lhs:.3}%, {pl_add_lhs:.3}%)",
+                    self.add_lhs.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "add_rhs",
+                &format_args!(
+                    "({:.3}ms, {add_rhs:.3}%, {pl_add_rhs:.3}%)",
+                    self.add_rhs.load(Relaxed) as f64 / 1000f64
+                ),
+            )
             .finish()
     }
 }
 
-
 pub struct DB<D>
 where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive,
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+        + Archive,
 {
     pub(crate) env: Env,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
@@ -108,12 +165,16 @@ where
 }
 
 unsafe impl<D> Send for DB<D> where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Send
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+        + Archive
+        + Send
 {
 }
 
 unsafe impl<D> Sync for DB<D> where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + Sync
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+        + Archive
+        + Sync
 {
 }
 
@@ -205,7 +266,11 @@ where
         }
     }
 
-    pub(crate) fn write_postings_list(&self, rwtxn: &mut RwTxn, token_id_to_builder: Vec<RoaringishPackedBuilder>) {
+    pub(crate) fn write_postings_list(
+        &self,
+        rwtxn: &mut RwTxn,
+        token_id_to_builder: Vec<RoaringishPackedBuilder>,
+    ) {
         for (token_id, builder) in token_id_to_builder.into_iter().enumerate() {
             let token_id = token_id as u32;
             let packed = builder.finish();
@@ -449,13 +514,12 @@ where
 
             let pl = self.get_roaringish_packed(&rotxn, token_id);
             stats
-            .get_pls
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+                .get_pls
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
             token_to_token_id.insert(*token, token_id);
             token_id_to_packed.insert(token_id, pl);
         }
-
 
         let mut it = final_tokens.iter();
 
@@ -470,8 +534,8 @@ where
             let b = std::time::Instant::now();
             let lhs = *lhs + (*lhs_len - 1);
             stats
-            .add_lhs
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+                .add_lhs
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
             lhs.intersect::<I, _>(*rhs, *rhs_len, stats)
         } else {
             lhs.intersect::<I, _>(*rhs, *rhs_len, stats)

@@ -8,7 +8,10 @@ pub struct NaiveIntersect;
 impl IntersectSeal for NaiveIntersect {}
 
 impl Intersect for NaiveIntersect {
-    fn intersect<const FIRST: bool, L: Packed, R: Packed>(lhs: &BorrowRoaringishPacked<L>, rhs: &BorrowRoaringishPacked<R>) -> (Vec<u64>, Vec<u16>, Vec<u64>) {
+    fn intersect<const FIRST: bool, L: Packed, R: Packed>(
+        lhs: &BorrowRoaringishPacked<L>,
+        rhs: &BorrowRoaringishPacked<R>,
+    ) -> (Vec<u64>, Vec<u16>, Vec<u64>) {
         let lhs_positions = lhs.positions;
         let rhs_positions = rhs.positions;
         let lhs_doc_id_groups = lhs.doc_id_groups;
@@ -40,9 +43,13 @@ impl Intersect for NaiveIntersect {
                     let rhs = (*rhs_positions.get_unchecked(rhs_i)).into();
                     if FIRST {
                         let lhs = (*lhs_positions.get_unchecked(lhs_i)).into();
-                        positions_intersect.get_unchecked_mut(i).write((lhs << 1) & rhs);
+                        positions_intersect
+                            .get_unchecked_mut(i)
+                            .write((lhs << 1) & rhs);
 
-                        msb_doc_id_groups_result.get_unchecked_mut(j).write(lhs_doc_id_groups + 1);
+                        msb_doc_id_groups_result
+                            .get_unchecked_mut(j)
+                            .write(lhs_doc_id_groups + 1);
                         j += (lhs & 0x8000 > 1) as usize;
                     } else {
                         positions_intersect.get_unchecked_mut(i).write(1 & rhs);
@@ -58,7 +65,9 @@ impl Intersect for NaiveIntersect {
                 if FIRST {
                     unsafe {
                         let lhs = (*lhs_positions.get_unchecked(lhs_i)).into();
-                        msb_doc_id_groups_result.get_unchecked_mut(j).write(lhs_doc_id_groups + 1);
+                        msb_doc_id_groups_result
+                            .get_unchecked_mut(j)
+                            .write(lhs_doc_id_groups + 1);
                         j += (lhs & 0x8000 > 1) as usize;
                     }
                 }
@@ -75,7 +84,11 @@ impl Intersect for NaiveIntersect {
                 Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
                 Vec::from_raw_parts(positions_intersect_ptr, i, min),
                 if FIRST {
-                    Vec::from_raw_parts(msb_doc_id_groups_result_ptr, j, lhs_doc_id_groups.len() + 1)
+                    Vec::from_raw_parts(
+                        msb_doc_id_groups_result_ptr,
+                        j,
+                        lhs_doc_id_groups.len() + 1,
+                    )
                 } else {
                     Vec::from_raw_parts(msb_doc_id_groups_result_ptr, 0, 0)
                 },

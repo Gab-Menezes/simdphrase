@@ -14,20 +14,20 @@
 #![feature(avx512_target_feature)]
 #![feature(maybe_uninit_uninit_array)]
 
-mod indexer;
-mod db;
-mod utils;
 mod codecs;
+mod db;
+mod indexer;
 mod roaringish;
 mod searcher;
+mod utils;
 
-pub use db::{DB, Stats};
-pub use indexer::Indexer;
+pub use db::{Stats, DB};
 pub use indexer::CommonTokens;
-pub use searcher::Searcher;
-pub use utils::{normalize, tokenize};
-pub use roaringish::RoaringishPacked;
-pub use roaringish::BorrowRoaringishPacked;
-pub use roaringish::intersect::Intersect;
+pub use indexer::Indexer;
 pub use roaringish::intersect::naive;
 pub use roaringish::intersect::simd;
+pub use roaringish::intersect::Intersect;
+pub use roaringish::BorrowRoaringishPacked;
+pub use roaringish::RoaringishPacked;
+pub use searcher::Searcher;
+pub use utils::{normalize, tokenize};
