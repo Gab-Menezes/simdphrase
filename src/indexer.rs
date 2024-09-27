@@ -1,14 +1,9 @@
-use std::{
-    cell::Cell,
-    cmp::Reverse,
-    path::Path,
-};
+use std::{cell::Cell, cmp::Reverse, path::Path};
 
 use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive,
-    Serialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 
 use crate::{

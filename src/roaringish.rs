@@ -66,17 +66,14 @@ impl Debug for Roaringish {
 
 impl Display for Roaringish {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let it = self
-            .inner
-            .iter()
-            .flat_map(|packed| {
-                let group = get_group(*packed);
-                let encoded_values = get_encoded_positions(*packed);
-                let s = group * 16;
-                (0..16u32)
-                    .filter_map(move |i| ((encoded_values >> i) & 1 == 1).then_some(i))
-                    .map(move |i| s + i)
-            });
+        let it = self.inner.iter().flat_map(|packed| {
+            let group = get_group(*packed);
+            let encoded_values = get_encoded_positions(*packed);
+            let s = group * 16;
+            (0..16u32)
+                .filter_map(move |i| ((encoded_values >> i) & 1 == 1).then_some(i))
+                .map(move |i| s + i)
+        });
 
         f.debug_list().entries(it).finish()
     }

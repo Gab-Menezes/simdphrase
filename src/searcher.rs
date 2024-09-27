@@ -2,8 +2,7 @@ use std::path::{Path, PathBuf};
 
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive,
-    Serialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 
 use crate::{roaringish::intersect::Intersect, Stats, DB};

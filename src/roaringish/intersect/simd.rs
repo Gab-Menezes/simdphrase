@@ -426,7 +426,10 @@ impl Intersect for SimdIntersect {
             need_to_analyze_msb = last_b < last_a;
         }
 
-        if FIRST && need_to_analyze_msb && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len()) {
+        if FIRST
+            && need_to_analyze_msb
+            && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len())
+        {
             #[cfg(all(
                 target_feature = "avx512f",
                 target_feature = "avx512bw",

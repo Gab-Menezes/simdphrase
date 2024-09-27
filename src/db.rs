@@ -8,12 +8,10 @@ use std::{
 use ahash::{AHashMap, AHashSet, HashMapExt};
 use fxhash::{FxHashMap, FxHashSet};
 use heed::{
-    types::Str,
-    Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
+    types::Str, Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
 };
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec,
-    Archive, Serialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 
 use crate::{

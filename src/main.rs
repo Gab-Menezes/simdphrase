@@ -7,14 +7,10 @@
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{
-    naive::NaiveIntersect,
-    CommonTokens, Indexer, Searcher, Stats,
-};
+use phrase_search::{naive::NaiveIntersect, CommonTokens, Indexer, Searcher, Stats};
 use rayon::iter::ParallelIterator;
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle,
-    util::AlignedVec, Archive, Serialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 use std::{
     fmt::Debug,
