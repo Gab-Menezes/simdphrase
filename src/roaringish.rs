@@ -15,10 +15,7 @@ use std::{
     sync::atomic::Ordering::Relaxed,
 };
 
-use crate::{
-    pl::PostingList,
-    Stats,
-};
+use crate::Stats;
 
 use self::intersect::Intersect;
 
@@ -94,11 +91,11 @@ const fn group(val: u32) -> u32 {
     val / 16
 }
 
-const fn value(val: u32) -> u32 {
-    val % 16
+const fn value(val: u32) -> u16 {
+    (val % 16) as u16
 }
 
-const fn gv(val: u32) -> (u32, u32) {
+const fn gv(val: u32) -> (u32, u16) {
     (group(val), value(val))
 }
 
@@ -110,7 +107,7 @@ const fn get_group(packed: u32) -> u32 {
     packed >> 16
 }
 
-const fn make_position(value: u32) -> u32 {
+const fn make_position(value: u16) -> u16 {
     1 << value
 }
 
@@ -152,7 +149,7 @@ impl Roaringish {
         for (pos, v) in pos.iter_mut().zip(values.iter_mut()) {
             let (group, value) = gv(*pos);
             *pos = group;
-            v.write(value);
+            v.write(value as u32);
         }
         let groups = pos;
         let values = unsafe { values.assume_init() };
@@ -169,7 +166,7 @@ impl Roaringish {
 
             let mut packed = make_group(groups[0]);
             for value in values {
-                packed |= make_position(*value);
+                packed |= make_position(*value as u16) as u32;
             }
 
             inner.push(packed);
@@ -179,7 +176,69 @@ impl Roaringish {
     }
 }
 
-#[derive(Default, Debug, Serialize, Archive)]
+#[derive(Default, Debug)]
+pub struct RoaringishPackedBuilder {
+    doc_id_groups: Vec<u64>,
+    positions: Vec<u16>,
+}
+
+impl RoaringishPackedBuilder {
+    pub(crate) fn finish(self) -> RoaringishPacked {
+        RoaringishPacked {
+            doc_id_groups: self.doc_id_groups.into_boxed_slice(),
+            positions: self.positions.into_boxed_slice(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, doc_id: u32, mut pos: Vec<u32>) {
+        let doc_id = make_doc_id(doc_id);
+
+        let mut values: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(pos.len());
+        unsafe {
+            assume(values.len() == pos.len());
+        }
+        for (pos, v) in pos.iter_mut().zip(values.iter_mut()) {
+            let (group, value) = gv(*pos);
+            *pos = group;
+            v.write(value);
+        }
+
+        let groups = pos;
+        let values = unsafe { values.assume_init() };
+
+        self.doc_id_groups.reserve(values.len());
+        self.positions.reserve(values.len());
+
+        let mut b = 0;
+        for groups in groups.chunk_by(|g0, g1| g0 == g1) {
+            let values = unsafe { values.get_unchecked(b..(b + groups.len())) };
+            b += groups.len();
+
+            unsafe {
+                assume(values.len() <= 16);
+            }
+
+            let doc_id_group = doc_id | groups[0] as u64;
+            let mut value = 0;
+            for v in values {
+                value |= make_position(*v);
+            }
+
+            unsafe {
+                self.doc_id_groups
+                    .push_within_capacity(doc_id_group)
+                    .unwrap_unchecked();
+            }
+            unsafe {
+                self.positions
+                    .push_within_capacity(value)
+                    .unwrap_unchecked();
+            }
+        }
+    }
+}
+
+#[derive(Default, Debug, Serialize, Archive, PartialEq, Eq)]
 pub struct RoaringishPacked {
     pub doc_id_groups: Box<[u64]>,
     pub positions: Box<[u16]>,
@@ -188,7 +247,7 @@ pub struct RoaringishPacked {
 pub struct BorrowRoaringishPacked<'a, P: Packed> {
     pub(crate) doc_id_groups: &'a [P::DocIdGroup],
     pub(crate) positions: &'a [P::Position],
-    _marker: PhantomData<P>
+    _marker: PhantomData<P>,
 }
 
 impl<'a, P: Packed> BorrowRoaringishPacked<'a, P> {
@@ -196,7 +255,7 @@ impl<'a, P: Packed> BorrowRoaringishPacked<'a, P> {
         Self {
             doc_id_groups: r.doc_id_groups(),
             positions: r.positions(),
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 
@@ -204,7 +263,7 @@ impl<'a, P: Packed> BorrowRoaringishPacked<'a, P> {
         Self {
             doc_id_groups,
             positions,
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }
@@ -232,9 +291,9 @@ impl ArchivedRoaringishPacked {
         }
 
         unsafe {
-            doc_ids
-                .get_unchecked_mut(i)
-                .write(get_doc_id(self.doc_id_groups.last().unwrap_unchecked().to_native()))
+            doc_ids.get_unchecked_mut(i).write(get_doc_id(
+                self.doc_id_groups.last().unwrap_unchecked().to_native(),
+            ))
         };
         i += 1;
 
@@ -308,14 +367,18 @@ impl Add<u32> for &ArchivedRoaringishPacked {
             let postions_new_group = new_positions & bits_to_check;
             if postions_current_group > 0 {
                 unsafe {
-                    doc_id_groups.get_unchecked_mut(i).write(doc_id_group.to_native());
+                    doc_id_groups
+                        .get_unchecked_mut(i)
+                        .write(doc_id_group.to_native());
                     positions.get_unchecked_mut(i).write(postions_current_group);
                     i += 1;
                 }
             }
             if postions_new_group > 0 {
                 unsafe {
-                    doc_id_groups.get_unchecked_mut(i).write(doc_id_group.to_native() + 1);
+                    doc_id_groups
+                        .get_unchecked_mut(i)
+                        .write(doc_id_group.to_native() + 1);
                     positions.get_unchecked_mut(i).write(postions_new_group);
                     i += 1;
                 }
@@ -379,45 +442,6 @@ impl Add<u32> for &RoaringishPacked {
     }
 }
 
-impl From<&PostingList> for RoaringishPacked {
-    fn from(pl: &PostingList) -> Self {
-        let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(pl.len_sum as usize);
-        let mut positions: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(pl.len_sum as usize);
-
-        let doc_ids = pl.doc_ids.as_slice();
-        let roaringish = pl.positions.as_slice();
-        unsafe { assume(doc_ids.len() == roaringish.len()) }
-
-        let mut b = 0;
-        for (doc_id, roaringish) in doc_ids.iter().zip(roaringish.iter()) {
-            let doc_id = make_doc_id(*doc_id);
-
-            let doc_id_groups =
-                unsafe { doc_id_groups.get_unchecked_mut(b..(b + roaringish.inner.len())) };
-            let positions = unsafe { positions.get_unchecked_mut(b..(b + roaringish.inner.len())) };
-            b += roaringish.inner.len();
-
-            for ((doc_id_group, position), packed) in doc_id_groups
-                .iter_mut()
-                .zip(positions.iter_mut())
-                .zip(roaringish.inner.iter())
-            {
-                let group = get_group(*packed) as u64;
-                let encoded_positions = get_encoded_positions(*packed) as u16;
-                doc_id_group.write(doc_id | group);
-                position.write(encoded_positions);
-            }
-        }
-
-        let doc_id_groups = unsafe { doc_id_groups.assume_init() };
-        let positions = unsafe { positions.assume_init() };
-        Self {
-            doc_id_groups,
-            positions,
-        }
-    }
-}
-
 pub trait Packed {
     type DocIdGroup: Copy + Into<u64>;
     type Position: Copy + Into<u16>;
@@ -425,21 +449,29 @@ pub trait Packed {
     fn doc_id_groups(&self) -> &[Self::DocIdGroup];
     fn positions(&self) -> &[Self::Position];
 
-    fn intersect<I: Intersect, R: Packed>(&self, rhs: &R, rhs_len: u32, stats: &Stats) -> RoaringishPacked 
+    fn intersect<I: Intersect, R: Packed>(
+        &self,
+        rhs: &R,
+        rhs_len: u32,
+        stats: &Stats,
+    ) -> RoaringishPacked
     where
-        Self: Packed + Sized
+        Self: Packed + Sized,
     {
         let lhs = BorrowRoaringishPacked::new(self);
         let rhs = BorrowRoaringishPacked::new(rhs);
         let b = std::time::Instant::now();
-        let (doc_id_groups, positions_intersect, msb_doc_id_groups) = I::intersect::<true, _, R>(&lhs, &rhs);
+        let (doc_id_groups, positions_intersect, msb_doc_id_groups) =
+            I::intersect::<true, _, R>(&lhs, &rhs);
         stats
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = BorrowRoaringishPacked::<RoaringishPacked>::from_raw(&msb_doc_id_groups, &[]);
+        let msb_packed =
+            BorrowRoaringishPacked::<RoaringishPacked>::from_raw(&msb_doc_id_groups, &[]);
         let b = std::time::Instant::now();
-        let (msb_doc_id_groups, msb_positions_intersect, _) = I::intersect::<false, RoaringishPacked, R>(&msb_packed, &rhs);
+        let (msb_doc_id_groups, msb_positions_intersect, _) =
+            I::intersect::<false, RoaringishPacked, R>(&msb_packed, &rhs);
         stats
             .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
@@ -662,8 +694,8 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
                 if v == u64::MAX {
                     doc_id_groups.pop();
                 }
-            },
-            None => {},
+            }
+            None => {}
         }
 
         let positions: Result<Vec<u16>, _> =
@@ -678,79 +710,5 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
             doc_id_groups: doc_id_groups.into_boxed_slice(),
             positions: positions.into_boxed_slice(),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn roaringish() {
-        let pos = vec![1, 5, 20, 21, 31, 100, 340];
-        let r = Roaringish::from_positions_sorted(pos);
-        println!("{r:b}");
-        println!("{r:?}");
-        println!("{r}");
-    }
-
-    #[test]
-    fn roaringish_packed() {
-        let doc_ids = vec![0, 1, 10];
-        let positions = vec![
-            Roaringish::from_positions_sorted(vec![1, 5, 20]),
-            Roaringish::from_positions_sorted(vec![300]),
-            Roaringish::from_positions_sorted(vec![10, 20]),
-        ];
-        println!("{}", positions[0]);
-        println!("{}", positions[1]);
-        println!("{}", positions[2]);
-        let pl = PostingList::new(doc_ids, positions);
-        let r = RoaringishPacked::from(&pl);
-        println!("{:#b}", r);
-    }
-
-    // #[test]
-    // fn roaringish_packed_intersect() {
-    //     let doc_ids0 = vec![0, 1, 2, 10, 12];
-    //     let positions0 = vec![
-    //         Roaringish::from_positions_sorted(vec![1, 5, 20]),
-    //         Roaringish::from_positions_sorted(vec![300]),
-    //         Roaringish::from_positions_sorted(vec![1]),
-    //         Roaringish::from_positions_sorted(vec![10, 20, 31, 34, 49, 63]),
-    //         Roaringish::from_positions_sorted(vec![15]),
-    //     ];
-    //     let pl0 = PostingList::new(doc_ids0, positions0);
-    //     let r0 = RoaringishPacked::from(&pl0);
-
-    //     let doc_ids1 = vec![0, 1, 2, 10, 12];
-    //     let positions1 = vec![
-    //         Roaringish::from_positions_sorted(vec![2, 6]),
-    //         Roaringish::from_positions_sorted(vec![301]),
-    //         Roaringish::from_positions_sorted(vec![3]),
-    //         Roaringish::from_positions_sorted(vec![11, 21, 32, 35, 50, 64]),
-    //         Roaringish::from_positions_sorted(vec![16]),
-    //     ];
-    //     let pl1 = PostingList::new(doc_ids1, positions1);
-    //     let r1 = RoaringishPacked::from(&pl1);
-
-    //     println!("{r0:#b}");
-    //     println!("{r1:#b}");
-
-    //     let intersection = r0.intersect(&r1, 1);
-    //     let doc_ids = intersection.get_doc_ids();
-    //     println!("{intersection}");
-    //     println!("{doc_ids:?}");
-    // }
-
-    #[test]
-    fn add_roaringish_packed() {
-        let doc_ids0 = vec![0];
-        let positions0 = vec![Roaringish::from_positions_sorted(vec![15, 14])];
-        let pl0 = PostingList::new(doc_ids0, positions0);
-        let r0 = RoaringishPacked::from(&pl0);
-        let r1 = &r0 + 1;
-        println!("{r0:b}");
-        println!("{r1:b}");
     }
 }

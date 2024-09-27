@@ -26,8 +26,7 @@ use rkyv::{
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    pl::PostingList,
-    roaringish::{intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, Packed},
+    roaringish::{intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked, RoaringishPackedBuilder},
     tokenize,
     utils::MAX_SEQ_LEN,
 };
@@ -206,10 +205,10 @@ where
         }
     }
 
-    pub(crate) fn write_postings_list(&self, rwtxn: &mut RwTxn, token_id_to_pl: &[PostingList]) {
-        for (token_id, pl) in token_id_to_pl.iter().enumerate() {
+    pub(crate) fn write_postings_list(&self, rwtxn: &mut RwTxn, token_id_to_builder: Vec<RoaringishPackedBuilder>) {
+        for (token_id, builder) in token_id_to_builder.into_iter().enumerate() {
             let token_id = token_id as u32;
-            let packed = RoaringishPacked::from(pl);
+            let packed = builder.finish();
             self.db_token_id_to_roaringish_packed
                 .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &packed)
                 .unwrap();

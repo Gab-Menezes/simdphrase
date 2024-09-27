@@ -16,7 +16,6 @@
 
 mod indexer;
 mod db;
-mod pl;
 mod utils;
 mod codecs;
 mod roaringish;
