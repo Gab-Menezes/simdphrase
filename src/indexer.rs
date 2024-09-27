@@ -1,10 +1,18 @@
 use std::{
-    cell::Cell, cmp::Reverse, collections::HashMap, ops::{Deref, DerefMut}, path::{Path, PathBuf}, sync::atomic::{AtomicU32, Ordering}
+    cell::Cell,
+    cmp::Reverse,
+    collections::HashMap,
+    ops::{Deref, DerefMut},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use ahash::{AHashMap, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
-use rkyv::{api::high::HighSerializer, ser::{allocator::ArenaHandle}, util::AlignedVec, Archive, Deserialize, Serialize};
+use rkyv::{
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Deserialize,
+    Serialize,
+};
 
 use crate::{
     db::DB,
@@ -16,71 +24,6 @@ use crate::{
 
 const TOKEN_ID_TOO_LONG: u32 = u32::MAX;
 
-/// This is a macro because the compiler is dumb
-/// and can't borrow check between function boundries
-macro_rules! get_token_id {
-    ($label:lifetime, $self:ident, $token:ident) => {
-        $label: {
-            if $token.as_bytes().len() > 511 {
-                // break $label None;
-                break $label TOKEN_ID_TOO_LONG;
-            }
-
-            let (_, token_id) = $self
-                .token_to_token_id
-                .raw_entry_mut()
-                .from_key($token)
-                .or_insert_with(|| {
-                    let current_token_id = $self.next_token_id;
-                    $self.next_token_id += 1;
-
-                    ($token.to_string().into_boxed_str(), current_token_id)
-                });
-
-            if *token_id as usize >= $self.token_id_to_freq.len() {
-                $self.token_id_to_freq.push((*token_id, 1));
-                $self.token_id_to_token
-                    .push($token.to_string().into_boxed_str());
-                $self.token_id_to_pl.push(PostingList::default());
-            } else {
-                $self.token_id_to_freq[*token_id as usize].1 += 1;
-            }
-
-            *token_id
-            // Some(*token_id)
-        }
-    };
-}
-
-macro_rules! analyze_common_tokens_sequence {
-    ($label:lifetime, $token_id_label:lifetime, $self:ident, $begin_pos:ident, $sequence:ident, $token_id_to_positions:ident) => {
-        $label: {
-            if $sequence.len() <= 1 {
-                break $label;
-            }
-
-            for i in 0..($sequence.len() - 1) {
-                let b = i + 2;
-                let e = ($sequence.len() + 1).min(i + MAX_SEQ_LEN + 1);
-                for j in b..e {
-                    let token: String = $sequence[i..j]
-                        .iter()
-                        .map(|token_id| $self.token_id_to_token[*token_id as usize].as_ref())
-                        .intersperse(" ")
-                        .collect();
-                    let token = token.as_str();
-                    let token_id = get_token_id!($token_id_label, $self, token);
-
-                    $token_id_to_positions
-                        .entry(token_id)
-                        .or_default()
-                        .push(($begin_pos + i) as u32);
-                }
-            }
-        }
-    };
-}
-
 #[derive(Debug)]
 pub enum CommonTokens {
     List(Vec<String>),
@@ -91,7 +34,8 @@ pub enum CommonTokens {
 #[derive(Debug)]
 struct InnerIndexer<D>
 where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive,
+    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+        + Archive,
 {
     next_token_id: u32,
     token_to_token_id: AHashMap<Box<str>, u32>,
@@ -164,12 +108,88 @@ where
         self.token_id_reprs.push(token_id_repr);
     }
 
+    fn get_token_id(
+        token: &str,
+        token_to_token_id: &mut AHashMap<Box<str>, u32>,
+        token_id_to_token: &mut Vec<Box<str>>,
+        token_id_to_freq: &mut Vec<(u32, u32)>,
+        token_id_to_pl: &mut Vec<PostingList>,
+        next_token_id: &mut u32,
+    ) -> u32 {
+        if token.as_bytes().len() > 511 {
+            return TOKEN_ID_TOO_LONG;
+        }
+        let (_, token_id) = token_to_token_id
+            .raw_entry_mut()
+            .from_key(token)
+            .or_insert_with(|| {
+                let current_token_id = *next_token_id;
+                *next_token_id += 1;
+                (token.to_string().into_boxed_str(), current_token_id)
+            });
+        if *token_id as usize >= token_id_to_freq.len() {
+            token_id_to_freq.push((*token_id, 1));
+            token_id_to_token.push(token.to_string().into_boxed_str());
+            token_id_to_pl.push(PostingList::default());
+        } else {
+            token_id_to_freq[*token_id as usize].1 += 1;
+        }
+        *token_id
+    }
+
+    fn analyze_common_tokens_sequence(
+        sequence: &[u32],
+        begin_pos: usize,
+        token_id_to_positions: &mut FxHashMap<u32, Vec<u32>>,
+
+        token_to_token_id: &mut AHashMap<Box<str>, u32>,
+        token_id_to_token: &mut Vec<Box<str>>,
+        token_id_to_freq: &mut Vec<(u32, u32)>,
+        token_id_to_pl: &mut Vec<PostingList>,
+        next_token_id: &mut u32,
+    ) {
+        if sequence.len() <= 1 {
+            return;
+        }
+        for i in 0..(sequence.len() - 1) {
+            let b = i + 2;
+            let e = (sequence.len() + 1).min(i + MAX_SEQ_LEN + 1);
+            for j in b..e {
+                let token: String = sequence[i..j]
+                    .iter()
+                    .map(|token_id| token_id_to_token[*token_id as usize].as_ref())
+                    .intersperse(" ")
+                    .collect();
+                let token = token.as_str();
+                let token_id = Self::get_token_id(
+                    token,
+                    token_to_token_id,
+                    token_id_to_token,
+                    token_id_to_freq,
+                    token_id_to_pl,
+                    next_token_id,
+                );
+                token_id_to_positions
+                    .entry(token_id)
+                    .or_default()
+                    .push((begin_pos + i) as u32);
+            }
+        }
+    }
+
     fn index_doc(&mut self, content: &str, doc_id: u32) -> Vec<u32> {
         let mut token_id_repr = Vec::new();
         let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
-            let token_id = get_token_id!('a, self, token);
+            let token_id = Self::get_token_id(
+                token,
+                &mut self.token_to_token_id,
+                &mut self.token_id_to_token,
+                &mut self.token_id_to_freq,
+                &mut self.token_id_to_pl,
+                &mut self.next_token_id,
+            );
 
             token_id_to_positions
                 .entry(token_id)
@@ -275,13 +295,31 @@ where
                     continue;
                 }
 
-                analyze_common_tokens_sequence!('a, 'b, self, begin_pos, sequence, token_id_to_positions);
+                Self::analyze_common_tokens_sequence(
+                    &sequence,
+                    begin_pos,
+                    &mut token_id_to_positions,
+                    &mut self.token_to_token_id,
+                    &mut self.token_id_to_token,
+                    &mut self.token_id_to_freq,
+                    &mut self.token_id_to_pl,
+                    &mut self.next_token_id,
+                );
 
                 sequence.clear();
                 begin_pos = pos + 1;
             }
 
-            analyze_common_tokens_sequence!('a, 'b, self, begin_pos, sequence, token_id_to_positions);
+            Self::analyze_common_tokens_sequence(
+                &sequence,
+                begin_pos,
+                &mut token_id_to_positions,
+                &mut self.token_to_token_id,
+                &mut self.token_id_to_token,
+                &mut self.token_id_to_freq,
+                &mut self.token_id_to_pl,
+                &mut self.next_token_id,
+            );
 
             for (token_id, positions) in token_id_to_positions {
                 if token_id == TOKEN_ID_TOO_LONG {
@@ -300,7 +338,8 @@ where
 
 pub struct Indexer<'a, D>
 where
-    D: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>> + Archive,
+    D: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
+        + Archive,
 {
     path: &'a Path,
     shard_db_size: usize,
@@ -348,7 +387,10 @@ where
 
             if let Some(docs_per_shard) = self.docs_per_shard {
                 if self.next_doc_id % docs_per_shard == 0 {
-                    let indexer = self.indexer.replace(InnerIndexer::new(self.docs_per_shard, self.avg_document_tokens));
+                    let indexer = self.indexer.replace(InnerIndexer::new(
+                        self.docs_per_shard,
+                        self.avg_document_tokens,
+                    ));
                     let b = std::time::Instant::now();
                     indexer.flush(
                         self.path,
