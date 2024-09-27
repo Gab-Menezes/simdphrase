@@ -15,7 +15,7 @@
         overlays = [ fenix.overlays.default ];
       };
       libPath = with pkgs; lib.makeLibraryPath [
-        "${pkgs.stdenv.cc.cc.lib}"
+        stdenv.cc.cc
       ];
     in 
     {
@@ -43,7 +43,11 @@
           pkgs.llvmPackages_19.bintools
         ];
 
-        LD_LIBRARY_PATH = libPath;
+        #LD_LIBRARY_PATH = libPath;
+        shellHook = ''
+          export LD_LIBRARY_PATH=$NIX_LD_LIBRARY_PATH
+        '';
+
       };
     };
 }
