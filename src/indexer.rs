@@ -202,7 +202,7 @@ where
         mut self,
         path: &Path,
         db_size: usize,
-        shard_id: u32,
+        shard_id: &mut u32,
         common_tokens: &Option<CommonTokens>,
     ) {
         if self.doc_ids.is_empty() {
@@ -231,6 +231,8 @@ where
         rwtxn.commit().unwrap();
 
         println!("Flushed shard: {shard_id} in {:?}", b.elapsed());
+
+        *shard_id += 1;
     }
 
     fn generate_common_tokens(&mut self, common_tokens: &CommonTokens) -> FxHashSet<u32> {
@@ -332,9 +334,9 @@ where
     path: &'a Path,
     shard_db_size: usize,
     next_doc_id: u32,
+    next_shard_id: u32,
     docs_per_shard: Option<u32>,
     indexer: Cell<InnerIndexer<D>>,
-    shards: Vec<DB<D>>,
     common_tokens: Option<CommonTokens>,
     avg_document_tokens: Option<u32>,
 }
@@ -356,9 +358,9 @@ where
             path,
             shard_db_size,
             next_doc_id: 0,
+            next_shard_id: 0,
             docs_per_shard,
             indexer: Cell::new(InnerIndexer::new(docs_per_shard, avg_document_tokens)),
-            shards: Vec::new(),
             common_tokens,
             avg_document_tokens,
         }
@@ -383,7 +385,7 @@ where
                     indexer.flush(
                         self.path,
                         self.shard_db_size,
-                        self.shards.len() as u32,
+                        &mut self.next_shard_id,
                         &self.common_tokens,
                     );
                     println!("Outter: {:?}", b.elapsed());
@@ -394,11 +396,11 @@ where
         num_docs
     }
 
-    pub fn flush(self) {
+    pub fn flush(mut self) {
         self.indexer.into_inner().flush(
             self.path,
             self.shard_db_size,
-            self.shards.len() as u32,
+            &mut self.next_shard_id,
             &self.common_tokens,
         );
     }
