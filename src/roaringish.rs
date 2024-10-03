@@ -1,11 +1,10 @@
 pub mod intersect;
 
 use arbitrary::{Arbitrary, Unstructured};
-use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::{Archive, Serialize};
 use std::marker::PhantomData;
 use std::{
     fmt::{Binary, Debug, Display},
-    intrinsics::assume,
     mem::MaybeUninit,
     ops::Add,
     sync::atomic::Ordering::Relaxed,
@@ -93,7 +92,6 @@ impl RoaringishPacked {
     }
 }
 
-
 pub struct BorrowRoaringishPacked<'a, P: Packed> {
     pub(crate) packed: &'a [P::Packed],
     _marker: PhantomData<P>,
@@ -118,7 +116,7 @@ impl<'a, P: Packed> BorrowRoaringishPacked<'a, P> {
 impl ArchivedRoaringishPacked {
     pub fn get_doc_ids(&self) -> Vec<u32> {
         // TODO: SIMD this
-        if self.packed.len() == 0 {
+        if self.packed.is_empty() {
             return Vec::new();
         }
 
@@ -153,7 +151,7 @@ impl ArchivedRoaringishPacked {
 impl RoaringishPacked {
     pub fn get_doc_ids(&self) -> Vec<u32> {
         // TODO: SIMD this
-        if self.packed.len() == 0 {
+        if self.packed.is_empty() {
             return Vec::new();
         }
 
@@ -491,8 +489,6 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
             }
         }
 
-        Ok(Self {
-            packed,
-        })
+        Ok(Self { packed })
     }
 }

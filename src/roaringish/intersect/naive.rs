@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 
 use crate::roaringish::{
-    get_values, BorrowRoaringishPacked, Packed, ADD_ONE_GROUP, MASK_DOC_ID_GROUP, MASK_VALUES,
+    get_values, BorrowRoaringishPacked, Packed, ADD_ONE_GROUP, MASK_DOC_ID_GROUP,
 };
 
 use super::{private::IntersectSeal, Intersect};

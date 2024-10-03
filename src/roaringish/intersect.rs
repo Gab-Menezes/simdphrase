@@ -69,7 +69,7 @@ pub trait Intersect: private::IntersectSeal {
         i_packed_result: &mut usize,
 
         msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
-        i_msb_doc_id_groups_result: &mut usize
+        i_msb_doc_id_groups_result: &mut usize,
     );
 
     fn intersection_buffer_size<L: Packed, R: Packed>(

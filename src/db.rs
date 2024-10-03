@@ -17,9 +17,7 @@ use rkyv::{
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    roaringish::{
-        intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked,
-    },
+    roaringish::{intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked},
     tokenize,
     utils::MAX_SEQ_LEN,
 };
@@ -260,10 +258,10 @@ where
         rwtxn: &mut RwTxn,
         token_id_to_packed: &[RoaringishPacked],
     ) {
-        for (token_id, packed) in token_id_to_packed.into_iter().enumerate() {
+        for (token_id, packed) in token_id_to_packed.iter().enumerate() {
             let token_id = token_id as u32;
             self.db_token_id_to_roaringish_packed
-                .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &packed)
+                .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, packed)
                 .unwrap();
         }
     }
