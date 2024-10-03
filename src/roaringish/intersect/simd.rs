@@ -310,7 +310,7 @@ impl Intersect for SimdIntersect {
                     );
                 }
 
-                i += mask_a.count_ones() as usize;
+                *i_packed_result += mask_a.count_ones() as usize;
             }
 
             #[cfg(not(all(
@@ -434,7 +434,7 @@ impl Intersect for SimdIntersect {
             ))]
             unsafe {
                 use std::arch::x86_64::_mm512_loadu_epi64;
-                let va_packed = Simd::from(_mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _));
+                let va_packed = Simd::from(_mm512_loadu_epi64(a.as_ptr().add(*lhs_i) as *const _));
                 let va_doc_id_group = va_packed & mask_doc_id_group;
                 let va_values = va_packed & mask_values;
                 analyze_msb::<L>(
