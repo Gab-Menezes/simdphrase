@@ -19,7 +19,6 @@ use crate::{
     normalize,
     roaringish::{
         intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked,
-        RoaringishPackedBuilder,
     },
     tokenize,
     utils::MAX_SEQ_LEN,
@@ -259,11 +258,10 @@ where
     pub(crate) fn write_postings_list(
         &self,
         rwtxn: &mut RwTxn,
-        token_id_to_builder: Vec<RoaringishPackedBuilder>,
+        token_id_to_packed: &[RoaringishPacked],
     ) {
-        for (token_id, builder) in token_id_to_builder.into_iter().enumerate() {
+        for (token_id, packed) in token_id_to_packed.into_iter().enumerate() {
             let token_id = token_id as u32;
-            let packed = builder.finish();
             self.db_token_id_to_roaringish_packed
                 .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &packed)
                 .unwrap();
