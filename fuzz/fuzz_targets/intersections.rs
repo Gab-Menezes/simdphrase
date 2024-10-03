@@ -7,12 +7,11 @@ use phrase_search::naive::NaiveIntersect;
 use phrase_search::Intersect;
 use phrase_search::simd::SimdIntersect;
 
-fn compare(lhs: &(Vec<u64>, Vec<u16>, Vec<u64>), rhs: &(Vec<u64>, Vec<u16>, Vec<u64>)) {
+fn compare(lhs: &(Vec<u64>, Vec<u64>), rhs: &(Vec<u64>, Vec<u64>)) {
     assert_eq!(lhs.0, rhs.0);
-    assert_eq!(lhs.1, rhs.1);
-    assert!(lhs.2.len() <= rhs.2.len());
-    assert_eq!(lhs.2, rhs.2[..lhs.2.len()]);
-    for v in rhs.2.windows(2) {
+    assert!(lhs.1.len() <= rhs.1.len());
+    assert_eq!(lhs.1, rhs.1[..lhs.1.len()]);
+    for v in rhs.1.windows(2) {
         assert!(v[0] < v[1]);
     }
 }
