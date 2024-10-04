@@ -47,12 +47,12 @@ pub trait Intersect: private::IntersectSeal {
         );
 
         let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
-        let positions_result_ptr = Box::into_raw(values_result) as *mut _;
+        let values_result_ptr = Box::into_raw(values_result) as *mut _;
         let msb_doc_id_groups_result_ptr = Box::into_raw(msb_doc_id_groups_result) as *mut _;
         unsafe {
             (
                 Vec::from_raw_parts(doc_id_groups_result_ptr, i, buffer_size),
-                Vec::from_raw_parts(positions_result_ptr, i, buffer_size),
+                Vec::from_raw_parts(values_result_ptr, i, buffer_size),
                 if FIRST {
                     Vec::from_raw_parts(
                         msb_doc_id_groups_result_ptr,

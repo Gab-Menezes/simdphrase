@@ -29,10 +29,6 @@ const fn gv(val: u32) -> (u32, u16) {
     (group(val), value(val))
 }
 
-const fn get_group(packed: u32) -> u32 {
-    packed >> 16
-}
-
 const fn make_value(value: u16) -> u16 {
     1 << value
 }
