@@ -7,7 +7,7 @@
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{naive::NaiveIntersect, CommonTokens, Indexer, Searcher, Stats};
+use phrase_search::{naive::NaiveIntersect, simd::SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
 use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
@@ -75,6 +75,7 @@ where
         + Archive
         + 'static,
 {
+    type Intersect = NaiveIntersect;
     let b = std::time::Instant::now();
 
     let searcher = Searcher::<D>::new(&args.index_name, args.db_size).unwrap();
@@ -89,9 +90,13 @@ where
     let queries: Vec<_> = queries.lines().collect();
 
     for q in queries.iter() {
-        let mut sum_micros = 0;
-        let mut res = 0;
         let stats = Stats::default();
+        for _ in 0..20 {
+            let doc_ids = searcher.search::<Intersect>(q, &stats);
+        }
+
+        let stats = Stats::default();
+        let b = std::time::Instant::now();
         for _ in 0..args.runs {
             // Command::new("/bin/bash")
             //     .arg("./clear_cache.sh")
@@ -99,20 +104,16 @@ where
             //     .status()
             //     .unwrap();
 
-            let b = std::time::Instant::now();
 
-            let doc_ids = searcher.search::<NaiveIntersect>(q, &stats);
-            // let doc_ids = searcher.par_search(q, &stats);
-            // let doc_ids = shard.search(q, &stats);
-
-            // println!("{doc_ids:?}");
-            // let doc_ids = db.get_documents_by_ids(doc_ids);
-
-            sum_micros += b.elapsed().as_micros();
-            res = res.max(doc_ids.len());
+            let doc_ids = searcher.search::<Intersect>(q, &stats);
         }
-        let avg_ms = sum_micros as f64 / args.runs as f64 / 1000_f64;
-        println!("query: {q:?} took {avg_ms:.4} ms/iter ({res} results found)");
+        let e = b.elapsed().as_micros();
+        let avg_ms = e as f64 / args.runs as f64 / 1000_f64;
+
+        let stats_ = Stats::default();
+        let n_found = searcher.search::<Intersect>(q, &stats_).len();
+
+        println!("query: {q:?} took {avg_ms:.4} ms/iter ({n_found} results found)");
         println!("{stats:#?}");
     }
 }
@@ -208,7 +209,7 @@ fn index_msmarco(args: IndexFile) {
     let mut indexer = Indexer::new(
         &args.index_name,
         args.db_size,
-        Some(500000),
+        Some(200000),
         Some(CommonTokens::FixedNum(50)),
         Some(1460),
     );
