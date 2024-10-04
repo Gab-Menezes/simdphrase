@@ -1,7 +1,7 @@
 pub mod intersect;
 
 use arbitrary::{Arbitrary, Unstructured};
-use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::{Archive, Serialize};
 use std::marker::PhantomData;
 use std::{
     fmt::{Binary, Debug, Display},
@@ -53,7 +53,7 @@ pub struct RoaringishPacked {
 
 impl RoaringishPacked {
     pub fn get_doc_ids(&self) -> Vec<u32> {
-        if self.doc_id_groups.len() == 0 {
+        if self.doc_id_groups.is_empty() {
             return Vec::new();
         }
 
@@ -159,7 +159,7 @@ impl<'a, P: Packed> BorrowRoaringishPacked<'a, P> {
 
 impl ArchivedRoaringishPacked {
     pub fn get_doc_ids(&self) -> Vec<u32> {
-        if self.doc_id_groups.len() == 0 {
+        if self.doc_id_groups.is_empty() {
             return Vec::new();
         }
 
