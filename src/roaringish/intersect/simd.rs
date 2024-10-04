@@ -9,7 +9,25 @@ use std::{
 
 use crate::roaringish::{BorrowRoaringishPacked, Packed};
 
+use super::naive::NaiveIntersect;
 use super::{private::IntersectSeal, Intersect};
+
+#[cfg(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vl",
+    target_feature = "avx512vbmi2",
+    target_feature = "avx512dq",
+))]
+const N: usize = 8;
+#[cfg(not(all(
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vl",
+    target_feature = "avx512vbmi2",
+    target_feature = "avx512dq",
+)))]
+const N: usize = 4;
 
 #[cfg(all(
     target_feature = "avx512f",
@@ -182,53 +200,26 @@ pub struct SimdIntersect;
 impl IntersectSeal for SimdIntersect {}
 
 impl Intersect for SimdIntersect {
-    fn intersect<const FIRST: bool, L: Packed, R: Packed>(
+    fn inner_intersect<const FIRST: bool, L: Packed, R: Packed>(
         lhs: &BorrowRoaringishPacked<L>,
         rhs: &BorrowRoaringishPacked<R>,
-    ) -> (Vec<u64>, Vec<u16>, Vec<u64>) {
-        #[cfg(all(
-            target_feature = "avx512f",
-            target_feature = "avx512bw",
-            target_feature = "avx512vl",
-            target_feature = "avx512vbmi2",
-            target_feature = "avx512dq",
-        ))]
-        const N: usize = 8;
-        #[cfg(not(all(
-            target_feature = "avx512f",
-            target_feature = "avx512bw",
-            target_feature = "avx512vl",
-            target_feature = "avx512vbmi2",
-            target_feature = "avx512dq",
-        )))]
-        const N: usize = 4;
-
-        let lhs_positions = lhs.positions;
-        let rhs_positions = rhs.positions;
-        let lhs_doc_id_groups = lhs.doc_id_groups;
-        let rhs_doc_id_groups = rhs.doc_id_groups;
-
-        let mut lhs_i = 0;
-        let mut rhs_i = 0;
-
-        // TODO: Is this `+ N` actually needed ? Let's keep it just to be sure
-        let min = lhs_doc_id_groups.len().min(rhs_doc_id_groups.len()) + 1 + N;
-        let mut i = 0;
-        let mut j = 0;
-        let mut doc_id_groups_result: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(min);
-        let mut positions_intersect: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(min);
-        let mut msb_doc_id_groups_result: Box<[MaybeUninit<u64>]> = if FIRST {
-            Box::new_uninit_slice(lhs_doc_id_groups.len() + 1)
-        } else {
-            Box::new_uninit_slice(0)
-        };
-
-        let end_lhs = lhs_doc_id_groups.len() / N * N;
-        let end_rhs = rhs_doc_id_groups.len() / N * N;
-        let a = unsafe { lhs_doc_id_groups.get_unchecked(..end_lhs) };
-        let b = unsafe { rhs_doc_id_groups.get_unchecked(..end_rhs) };
-        let a_positions = unsafe { lhs_positions.get_unchecked(..end_lhs) };
-        let b_positions = unsafe { rhs_positions.get_unchecked(..end_rhs) };
+    
+        lhs_i: &mut usize,
+        rhs_i: &mut usize,
+    
+        doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
+        values_result: &mut Box<[MaybeUninit<u16>]>,
+        i: &mut usize,
+    
+        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
+        j: &mut usize,
+    ) {
+        let end_lhs = lhs.doc_id_groups.len() / N * N;
+        let end_rhs = rhs.doc_id_groups.len() / N * N;
+        let a = unsafe { lhs.doc_id_groups.get_unchecked(..end_lhs) };
+        let b = unsafe { rhs.doc_id_groups.get_unchecked(..end_rhs) };
+        let a_positions = unsafe { lhs.positions.get_unchecked(..end_lhs) };
+        let b_positions = unsafe { rhs.positions.get_unchecked(..end_rhs) };
         let mut need_to_analyze_msb = false;
         unsafe {
             assume(a.len() % N == 0);
@@ -237,7 +228,7 @@ impl Intersect for SimdIntersect {
             assume(b_positions.len() % N == 0);
         }
 
-        while lhs_i < a.len() && rhs_i < b.len() {
+        while *lhs_i < a.len() && *rhs_i < b.len() {
             // --------------------- LOAD ---------------------
             #[cfg(all(
                 target_feature = "avx512f",
@@ -248,8 +239,8 @@ impl Intersect for SimdIntersect {
             ))]
             let (va, vb) = unsafe {
                 use std::arch::x86_64::_mm512_loadu_epi64;
-                let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
-                let vb = _mm512_loadu_epi64(b.as_ptr().add(rhs_i) as *const _);
+                let va = _mm512_loadu_epi64(a.as_ptr().add(*lhs_i) as *const _);
+                let vb = _mm512_loadu_epi64(b.as_ptr().add(*rhs_i) as *const _);
                 (va, vb)
             };
 
@@ -262,8 +253,8 @@ impl Intersect for SimdIntersect {
             )))]
             let (va, vb) = unsafe {
                 use std::arch::x86_64::_mm256_loadu_si256;
-                let va = _mm256_loadu_si256(a.as_ptr().add(lhs_i) as *const _);
-                let vb = _mm256_loadu_si256(b.as_ptr().add(rhs_i) as *const _);
+                let va = _mm256_loadu_si256(a.as_ptr().add(*lhs_i) as *const _);
+                let vb = _mm256_loadu_si256(b.as_ptr().add(*rhs_i) as *const _);
                 (va, vb)
             };
             // -----------------------------------------------
@@ -285,36 +276,36 @@ impl Intersect for SimdIntersect {
                 };
                 // TODO: avoid compressstore on zen4
                 _mm512_mask_compressstoreu_epi64(
-                    doc_id_groups_result.as_mut_ptr().add(i) as *mut _,
+                    doc_id_groups_result.as_mut_ptr().add(*i) as *mut _,
                     mask_a,
                     va,
                 );
 
                 let vb_positions: Simd<u16, N> = _mm_maskz_compress_epi16(
                     mask_b,
-                    _mm_loadu_epi16(b_positions.as_ptr().add(rhs_i) as *const _),
+                    _mm_loadu_epi16(b_positions.as_ptr().add(*rhs_i) as *const _),
                 )
                 .into();
 
                 if FIRST {
                     let va_positions: Simd<u16, N> = _mm_maskz_compress_epi16(
                         mask_a,
-                        _mm_loadu_epi16(a_positions.as_ptr().add(lhs_i) as *const _),
+                        _mm_loadu_epi16(a_positions.as_ptr().add(*lhs_i) as *const _),
                     )
                     .into();
 
                     _mm_storeu_epi16(
-                        positions_intersect.as_mut_ptr().add(i) as *mut _,
+                        values_result.as_mut_ptr().add(*i) as *mut _,
                         ((va_positions << 1) & vb_positions).into(),
                     );
                 } else {
                     _mm_storeu_epi16(
-                        positions_intersect.as_mut_ptr().add(i) as *mut _,
+                        values_result.as_mut_ptr().add(*i) as *mut _,
                         (Simd::splat(1) & vb_positions).into(),
                     );
                 }
 
-                i += mask_a.count_ones() as usize;
+                *i += mask_a.count_ones() as usize;
             }
 
             #[cfg(not(all(
@@ -337,15 +328,15 @@ impl Intersect for SimdIntersect {
                         .enumerate()
                     {
                         unsafe {
-                            let doc_id_groups = a.get_unchecked(lhs_i + j);
+                            let doc_id_groups = a.get_unchecked(*lhs_i + j);
                             doc_id_groups_result
-                                .get_unchecked_mut(i + a_i)
+                                .get_unchecked_mut(*i + a_i)
                                 .write((*doc_id_groups).into());
 
-                            let a_position = *a_positions.get_unchecked(lhs_i + j);
+                            let a_position = *a_positions.get_unchecked(*lhs_i + j);
                             *a_temp.get_unchecked_mut(a_i) = a_position.into();
 
-                            let b_position = *b_positions.get_unchecked(rhs_i + j);
+                            let b_position = *b_positions.get_unchecked(*rhs_i + j);
                             *b_temp.get_unchecked_mut(b_i) = b_position.into();
                         }
 
@@ -355,34 +346,33 @@ impl Intersect for SimdIntersect {
 
                     for (j, (a_p, b_p)) in a_temp.iter().zip(b_temp.iter()).enumerate() {
                         unsafe {
-                            positions_intersect
-                                .get_unchecked_mut(i + j)
+                            values_result
+                                .get_unchecked_mut(*i + j)
                                 .write((a_p << 1) & b_p);
                         }
                     }
-
-                    i += a_i;
+                    *i += a_i;
                 } else {
                     for (j, b_r) in mask_b.as_array().iter().enumerate() {
                         unsafe {
-                            let doc_id_groups = b.get_unchecked(rhs_i + j);
+                            let doc_id_groups = b.get_unchecked(*rhs_i + j);
                             doc_id_groups_result
-                                .get_unchecked_mut(i)
+                                .get_unchecked_mut(*i)
                                 .write((*doc_id_groups).into());
 
-                            let b_position = b_positions.get_unchecked(rhs_i + j);
-                            positions_intersect
-                                .get_unchecked_mut(i)
+                            let b_position = b_positions.get_unchecked(*rhs_i + j);
+                            values_result
+                                .get_unchecked_mut(*i)
                                 .write((*b_position).into() & 1);
                         }
-                        i += (*b_r == u64::MAX) as usize;
+                        *i += (*b_r == u64::MAX) as usize;
                     }
                 }
             }
             // -----------------------------------------------
 
-            let last_a = unsafe { (*a.get_unchecked(lhs_i + N - 1)).into() };
-            let last_b = unsafe { (*b.get_unchecked(rhs_i + N - 1)).into() };
+            let last_a = unsafe { (*a.get_unchecked(*lhs_i + N - 1)).into() };
+            let last_b = unsafe { (*b.get_unchecked(*rhs_i + N - 1)).into() };
 
             if FIRST {
                 if last_a <= last_b {
@@ -397,9 +387,9 @@ impl Intersect for SimdIntersect {
                         avx512_analyze_msb::<L>(
                             va,
                             a_positions,
-                            lhs_i,
-                            &mut msb_doc_id_groups_result,
-                            &mut j,
+                            *lhs_i,
+                            msb_doc_id_groups_result,
+                            j,
                         );
 
                         #[cfg(not(all(
@@ -412,23 +402,23 @@ impl Intersect for SimdIntersect {
                         simple_analyze_msb::<L>(
                             a,
                             a_positions,
-                            lhs_i,
-                            &mut msb_doc_id_groups_result,
-                            &mut j,
+                            *lhs_i,
+                            msb_doc_id_groups_result,
+                            j,
                         );
                     }
-                    lhs_i += N;
+                    *lhs_i += N;
                 }
             } else {
-                lhs_i += N * (last_a <= last_b) as usize;
+                *lhs_i += N * (last_a <= last_b) as usize;
             }
-            rhs_i += N * (last_b <= last_a) as usize;
+            *rhs_i += N * (last_b <= last_a) as usize;
             need_to_analyze_msb = last_b < last_a;
         }
 
         if FIRST
             && need_to_analyze_msb
-            && !(lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len())
+            && !(*lhs_i < lhs.doc_id_groups.len() && *rhs_i < rhs.doc_id_groups.len())
         {
             #[cfg(all(
                 target_feature = "avx512f",
@@ -439,13 +429,13 @@ impl Intersect for SimdIntersect {
             ))]
             unsafe {
                 use std::arch::x86_64::_mm512_loadu_epi64;
-                let va = _mm512_loadu_epi64(a.as_ptr().add(lhs_i) as *const _);
+                let va = _mm512_loadu_epi64(a.as_ptr().add(*lhs_i) as *const _);
                 avx512_analyze_msb::<L>(
                     va,
                     a_positions,
-                    lhs_i,
-                    &mut msb_doc_id_groups_result,
-                    &mut j,
+                    *lhs_i,
+                    msb_doc_id_groups_result,
+                    j,
                 );
             };
 
@@ -460,76 +450,32 @@ impl Intersect for SimdIntersect {
                 simple_analyze_msb::<L>(
                     a,
                     a_positions,
-                    lhs_i,
-                    &mut msb_doc_id_groups_result,
-                    &mut j,
+                    *lhs_i,
+                    msb_doc_id_groups_result,
+                    j,
                 )
             };
         }
 
-        // for the remaining elements we can do a 2 pointer approach
-        // since the 2 slices will be small
-        while lhs_i < lhs_doc_id_groups.len() && rhs_i < rhs_doc_id_groups.len() {
-            let lhs_doc_id_groups = unsafe { (*lhs_doc_id_groups.get_unchecked(lhs_i)).into() };
-            let rhs_doc_id_groups = unsafe { (*rhs_doc_id_groups.get_unchecked(rhs_i)).into() };
-            if lhs_doc_id_groups == rhs_doc_id_groups {
-                unsafe {
-                    doc_id_groups_result
-                        .get_unchecked_mut(i)
-                        .write(lhs_doc_id_groups);
-                    let rhs = (*rhs_positions.get_unchecked(rhs_i)).into();
-                    if FIRST {
-                        let lhs = (*lhs_positions.get_unchecked(lhs_i)).into();
-                        positions_intersect
-                            .get_unchecked_mut(i)
-                            .write((lhs << 1) & rhs);
+        NaiveIntersect::inner_intersect::<FIRST, L, R>(
+            lhs,
+            rhs,
+            lhs_i,
+            rhs_i,
 
-                        msb_doc_id_groups_result
-                            .get_unchecked_mut(j)
-                            .write(lhs_doc_id_groups + 1);
-                        j += (lhs & 0x8000 > 1) as usize;
-                    } else {
-                        positions_intersect.get_unchecked_mut(i).write(1 & rhs);
-                    }
-                };
+            doc_id_groups_result,
+            values_result,
+            i,
 
-                i += 1;
-                lhs_i += 1;
-                rhs_i += 1;
-            } else if lhs_doc_id_groups > rhs_doc_id_groups {
-                rhs_i += 1;
-            } else {
-                if FIRST {
-                    unsafe {
-                        let lhs = (*lhs_positions.get_unchecked(lhs_i)).into();
-                        msb_doc_id_groups_result
-                            .get_unchecked_mut(j)
-                            .write(lhs_doc_id_groups + 1);
-                        j += (lhs & 0x8000 > 1) as usize;
-                    }
-                }
-
-                lhs_i += 1;
-            }
-        }
-
-        let doc_id_groups_result_ptr = Box::into_raw(doc_id_groups_result) as *mut _;
-        let positions_intersect_ptr = Box::into_raw(positions_intersect) as *mut _;
-        let msb_doc_id_groups_result_ptr = Box::into_raw(msb_doc_id_groups_result) as *mut _;
-        unsafe {
-            (
-                Vec::from_raw_parts(doc_id_groups_result_ptr, i, min),
-                Vec::from_raw_parts(positions_intersect_ptr, i, min),
-                if FIRST {
-                    Vec::from_raw_parts(
-                        msb_doc_id_groups_result_ptr,
-                        j,
-                        lhs_doc_id_groups.len() + 1,
-                    )
-                } else {
-                    Vec::from_raw_parts(msb_doc_id_groups_result_ptr, 0, 0)
-                },
-            )
-        }
+            msb_doc_id_groups_result,
+            j,
+        );
+    }
+    
+    fn intersection_buffer_size<L: Packed, R: Packed>(
+        lhs: &BorrowRoaringishPacked<L>,
+        rhs: &BorrowRoaringishPacked<R>,
+    ) -> usize {
+        lhs.doc_id_groups.len().min(rhs.doc_id_groups.len()) + 1 + N
     }
 }
