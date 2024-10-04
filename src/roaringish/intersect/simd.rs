@@ -177,7 +177,7 @@ unsafe fn analyze_msb<L: Packed>(
 #[inline(always)]
 unsafe fn analyze_msb<L: Packed>(
     a: &[L::DocIdGroup],
-    a_positions: &[L::Position],
+    a_positions: &[L::Values],
     lhs_i: usize,
     msb_doc_id_groups_result: &mut [MaybeUninit<u64>],
     j: &mut usize,
@@ -351,8 +351,8 @@ impl Intersect for SimdIntersect {
         let end_rhs = rhs.doc_id_groups.len() / N * N;
         let a = unsafe { lhs.doc_id_groups.get_unchecked(..end_lhs) };
         let b = unsafe { rhs.doc_id_groups.get_unchecked(..end_rhs) };
-        let a_positions = unsafe { lhs.positions.get_unchecked(..end_lhs) };
-        let b_positions = unsafe { rhs.positions.get_unchecked(..end_rhs) };
+        let a_positions = unsafe { lhs.values.get_unchecked(..end_lhs) };
+        let b_positions = unsafe { rhs.values.get_unchecked(..end_rhs) };
         let mut need_to_analyze_msb = false;
         unsafe {
             assume(a.len() % N == 0);

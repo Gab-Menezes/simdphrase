@@ -8,7 +8,7 @@ use rkyv::{
 
 use crate::{
     db::DB,
-    roaringish::{RoaringishPackedBuilder, MAX_VALUE},
+    roaringish::{RoaringishPacked, MAX_VALUE},
     utils::{normalize, tokenize, MAX_SEQ_LEN},
 };
 
@@ -32,7 +32,7 @@ where
 
     // this 3 containers are in sync
     token_id_to_freq: Vec<(u32, u32)>,
-    token_id_to_builder: Vec<RoaringishPackedBuilder>,
+    token_id_to_packed: Vec<RoaringishPacked>,
     token_id_to_token: Vec<Box<str>>,
 
     // this 3 containers are in sync
@@ -59,7 +59,7 @@ where
                         next_token_id: 0,
                         token_to_token_id: AHashMap::with_capacity(len),
                         token_id_to_freq: Vec::with_capacity(len),
-                        token_id_to_builder: Vec::with_capacity(len),
+                        token_id_to_packed: Vec::with_capacity(len),
                         token_id_to_token: Vec::with_capacity(len),
                         token_id_reprs: Vec::with_capacity(len),
                         doc_ids: Vec::with_capacity(documents_per_shard as usize),
@@ -70,7 +70,7 @@ where
                     next_token_id: 0,
                     token_to_token_id: AHashMap::new(),
                     token_id_to_freq: Vec::new(),
-                    token_id_to_builder: Vec::new(),
+                    token_id_to_packed: Vec::new(),
                     token_id_to_token: Vec::new(),
                     token_id_reprs: Vec::new(),
                     doc_ids: Vec::with_capacity(documents_per_shard as usize),
@@ -81,7 +81,7 @@ where
                 next_token_id: 0,
                 token_to_token_id: AHashMap::new(),
                 token_id_to_freq: Vec::new(),
-                token_id_to_builder: Vec::new(),
+                token_id_to_packed: Vec::new(),
                 token_id_to_token: Vec::new(),
                 token_id_reprs: Vec::new(),
                 doc_ids: Vec::new(),
@@ -103,7 +103,7 @@ where
         token_to_token_id: &mut AHashMap<Box<str>, u32>,
         token_id_to_token: &mut Vec<Box<str>>,
         token_id_to_freq: &mut Vec<(u32, u32)>,
-        token_id_to_builder: &mut Vec<RoaringishPackedBuilder>,
+        token_id_to_packed: &mut Vec<RoaringishPacked>,
         next_token_id: &mut u32,
     ) -> u32 {
         if token.as_bytes().len() > 511 {
@@ -120,7 +120,7 @@ where
         if *token_id as usize >= token_id_to_freq.len() {
             token_id_to_freq.push((*token_id, 1));
             token_id_to_token.push(token.to_string().into_boxed_str());
-            token_id_to_builder.push(RoaringishPackedBuilder::default());
+            token_id_to_packed.push(RoaringishPacked::default());
         } else {
             token_id_to_freq[*token_id as usize].1 += 1;
         }
@@ -135,7 +135,7 @@ where
         token_to_token_id: &mut AHashMap<Box<str>, u32>,
         token_id_to_token: &mut Vec<Box<str>>,
         token_id_to_freq: &mut Vec<(u32, u32)>,
-        token_id_to_builder: &mut Vec<RoaringishPackedBuilder>,
+        token_id_to_packed: &mut Vec<RoaringishPacked>,
         next_token_id: &mut u32,
     ) {
         if sequence.len() <= 1 {
@@ -156,7 +156,7 @@ where
                     token_to_token_id,
                     token_id_to_token,
                     token_id_to_freq,
-                    token_id_to_builder,
+                    token_id_to_packed,
                     next_token_id,
                 );
                 token_id_to_positions
@@ -177,7 +177,7 @@ where
                 &mut self.token_to_token_id,
                 &mut self.token_id_to_token,
                 &mut self.token_id_to_freq,
-                &mut self.token_id_to_builder,
+                &mut self.token_id_to_packed,
                 &mut self.next_token_id,
             );
 
@@ -188,12 +188,12 @@ where
             token_id_repr.push(token_id);
         }
 
-        for (token_id, positions) in token_id_to_positions {
-            if token_id == TOKEN_ID_TOO_LONG {
+        for (token_id, positions) in token_id_to_positions.iter() {
+            if *token_id == TOKEN_ID_TOO_LONG {
                 continue;
             }
 
-            self.token_id_to_builder[token_id as usize].push(doc_id, positions);
+            self.token_id_to_packed[*token_id as usize].push(doc_id, positions);
         }
         token_id_repr
     }
@@ -222,7 +222,7 @@ where
 
         db.write_token_to_token_id(&mut rwtxn, &self.token_to_token_id);
 
-        db.write_postings_list(&mut rwtxn, self.token_id_to_builder);
+        db.write_postings_list(&mut rwtxn, self.token_id_to_packed);
 
         db.write_doc_id_to_document(&mut rwtxn, &self.doc_ids, &self.documents);
 
@@ -236,7 +236,7 @@ where
     }
 
     fn generate_common_tokens(&mut self, common_tokens: &CommonTokens) -> FxHashSet<u32> {
-        println!("before: {}", self.token_id_to_builder.len());
+        println!("before: {}", self.token_id_to_packed.len());
         let common_token_ids: FxHashSet<_> = match common_tokens {
             CommonTokens::List(tokens) => tokens
                 .iter()
@@ -293,7 +293,7 @@ where
                     &mut self.token_to_token_id,
                     &mut self.token_id_to_token,
                     &mut self.token_id_to_freq,
-                    &mut self.token_id_to_builder,
+                    &mut self.token_id_to_packed,
                     &mut self.next_token_id,
                 );
 
@@ -308,20 +308,20 @@ where
                 &mut self.token_to_token_id,
                 &mut self.token_id_to_token,
                 &mut self.token_id_to_freq,
-                &mut self.token_id_to_builder,
+                &mut self.token_id_to_packed,
                 &mut self.next_token_id,
             );
 
-            for (token_id, positions) in token_id_to_positions {
-                if token_id == TOKEN_ID_TOO_LONG {
+            for (token_id, positions) in token_id_to_positions.iter() {
+                if *token_id == TOKEN_ID_TOO_LONG {
                     continue;
                 }
 
-                self.token_id_to_builder[token_id as usize].push(*doc_id, positions);
+                self.token_id_to_packed[*token_id as usize].push(*doc_id, positions);
             }
         }
 
-        println!("after: {}", self.token_id_to_builder.len());
+        println!("after: {}", self.token_id_to_packed.len());
         common_token_ids
     }
 }

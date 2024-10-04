@@ -31,9 +31,9 @@ impl Intersect for NaiveIntersect {
                     doc_id_groups_result
                         .get_unchecked_mut(*i)
                         .write(lhs_doc_id_groups);
-                    let rhs = (*rhs.positions.get_unchecked(*rhs_i)).into();
+                    let rhs = (*rhs.values.get_unchecked(*rhs_i)).into();
                     if FIRST {
-                        let lhs = (*lhs.positions.get_unchecked(*lhs_i)).into();
+                        let lhs = (*lhs.values.get_unchecked(*lhs_i)).into();
                         values_result
                             .get_unchecked_mut(*i)
                             .write((lhs << 1) & rhs);
@@ -54,7 +54,7 @@ impl Intersect for NaiveIntersect {
             } else {
                 if FIRST {
                     unsafe {
-                        let lhs = (*lhs.positions.get_unchecked(*lhs_i)).into();
+                        let lhs = (*lhs.values.get_unchecked(*lhs_i)).into();
                         msb_doc_id_groups_result
                             .get_unchecked_mut(*j)
                             .write(lhs_doc_id_groups + 1);
