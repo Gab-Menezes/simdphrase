@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     fmt::Debug,
     path::Path,
     sync::atomic::{AtomicU64, Ordering::Relaxed},
@@ -9,9 +9,11 @@ use ahash::{AHashMap, AHashSet, HashMapExt};
 use fxhash::{FxHashMap, FxHashSet};
 use heed::{
     types::Str, Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
+    Unspecified,
 };
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
+    api::high::HighSerializer, deserialize, ser::allocator::ArenaHandle, util::AlignedVec, Archive,
+    Deserialize, Serialize,
 };
 
 use crate::{
@@ -142,13 +144,10 @@ where
         + Archive,
 {
     pub(crate) env: Env,
+    db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
-
-    db_token_to_token_id: Database<Str, NativeU32>,
-    db_token_id_to_roaringish_packed: Database<NativeU32, ZeroCopyCodec<RoaringishPacked>>,
-    db_common_token_id_to_token: Database<NativeU32, Str>,
-
-    common_tokens: AHashSet<Box<str>>,
+    db_token_to_roaringish_packed: Database<Str, ZeroCopyCodec<RoaringishPacked>>,
+    common_tokens: HashSet<String>,
 }
 
 unsafe impl<D> Send for DB<D> where
@@ -177,7 +176,7 @@ where
 
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(5)
+                .max_dbs(2)
                 .map_size(db_size)
                 .flags(EnvFlags::WRITE_MAP | EnvFlags::MAP_ASYNC)
                 .open(path)
@@ -185,6 +184,8 @@ where
         };
 
         let mut wrtxn = env.write_txn().unwrap();
+
+        let db_main = env.create_database(&mut wrtxn, None).unwrap();
 
         let db_doc_id_to_document = env
             .database_options()
@@ -194,35 +195,18 @@ where
             .create(&mut wrtxn)
             .unwrap();
 
-        let db_token_to_token_id = env
-            .create_database(&mut wrtxn, Some("token_to_token_id"))
-            .unwrap();
-
-        let db_token_id_to_roaringish_packed = env
-            .database_options()
-            .types::<NativeU32, ZeroCopyCodec<RoaringishPacked>>()
-            .flags(DatabaseFlags::REVERSE_KEY)
-            .name("db_token_id_to_roaringish_packed")
-            .create(&mut wrtxn)
-            .unwrap();
-
-        let db_common_token_id_to_token = env
-            .database_options()
-            .types::<NativeU32, Str>()
-            .flags(DatabaseFlags::REVERSE_KEY)
-            .name("common_token_id_to_token")
-            .create(&mut wrtxn)
+        let db_token_to_roaringish_packed = env
+            .create_database(&mut wrtxn, Some("token_to_roaringish_packed"))
             .unwrap();
 
         wrtxn.commit().unwrap();
 
         Self {
             env,
+            db_main,
             db_doc_id_to_document,
-            db_token_id_to_roaringish_packed,
-            db_token_to_token_id,
-            db_common_token_id_to_token,
-            common_tokens: AHashSet::new(),
+            db_token_to_roaringish_packed,
+            common_tokens: HashSet::default(),
         }
     }
 
@@ -239,50 +223,51 @@ where
         }
     }
 
-    pub(crate) fn write_token_to_token_id(
+    pub(crate) fn write_token_to_roaringish_packed(
         &self,
         rwtxn: &mut RwTxn,
         token_to_token_id: &AHashMap<Box<str>, u32>,
+        token_id_to_roaringish_packed: &[RoaringishPacked],
     ) {
         let mut token_to_token_id: Vec<_> = token_to_token_id.iter().collect();
         token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
+
         for (token, token_id) in token_to_token_id.iter() {
-            self.db_token_to_token_id
-                .put_with_flags(rwtxn, PutFlags::APPEND, token, token_id)
+            let roaringish_packed = &token_id_to_roaringish_packed[**token_id as usize];
+            self.db_token_to_roaringish_packed
+                .put_with_flags(rwtxn, PutFlags::APPEND, token, roaringish_packed)
                 .unwrap();
         }
     }
 
-    pub(crate) fn write_postings_list(
-        &self,
-        rwtxn: &mut RwTxn,
-        token_id_to_packed: Vec<RoaringishPacked>,
-    ) {
-        for (token_id, packed) in token_id_to_packed.into_iter().enumerate() {
-            let token_id = token_id as u32;
-            self.db_token_id_to_roaringish_packed
-                .put_with_flags(rwtxn, PutFlags::APPEND, &token_id, &packed)
-                .unwrap();
-        }
+    fn read_common_tokens(
+        rotxn: &RoTxn,
+        db_main: Database<Unspecified, Unspecified>,
+    ) -> HashSet<String> {
+        let k = db_main
+            .remap_types::<Str, ZeroCopyCodec<HashSet<String>>>()
+            .get(rotxn, "common_tokens")
+            .unwrap()
+            .unwrap();
+
+        deserialize::<_, rkyv::rancor::Error>(k).unwrap()
     }
 
-    pub(crate) fn write_common_token_ids(
+    pub(crate) fn write_common_tokens(
         &self,
         rwtxn: &mut RwTxn,
         common_token_ids: &FxHashSet<u32>,
         token_id_to_token: &[Box<str>],
     ) {
-        let mut token_id_to_token: Vec<_> = common_token_ids
+        let common_tokens: HashSet<_> = common_token_ids
             .iter()
-            .map(|token_id| (token_id, token_id_to_token[*token_id as usize].as_ref()))
+            .map(|token_id| token_id_to_token[*token_id as usize].to_string())
             .collect();
-        token_id_to_token.sort_unstable_by_key(|(token_id, _)| *token_id);
 
-        for (token_id, token) in token_id_to_token.iter() {
-            self.db_common_token_id_to_token
-                .put_with_flags(rwtxn, PutFlags::APPEND, token_id, token)
-                .unwrap();
-        }
+        self.db_main
+            .remap_types::<Str, ZeroCopyCodec<HashSet<String>>>()
+            .put(rwtxn, "common_tokens", &common_tokens)
+            .unwrap();
     }
 }
 
@@ -295,7 +280,7 @@ where
     pub fn open(path: &Path, db_size: usize) -> Self {
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(5)
+                .max_dbs(2)
                 .map_size(db_size)
                 .flags(EnvFlags::READ_ONLY)
                 .open(path)
@@ -303,6 +288,8 @@ where
         };
 
         let rotxn = env.read_txn().unwrap();
+
+        let db_main = env.open_database(&rotxn, None).unwrap().unwrap();
 
         let db_doc_id_to_document = env
             .database_options()
@@ -313,55 +300,24 @@ where
             .unwrap()
             .unwrap();
 
-        let db_token_to_token_id = env
-            .open_database(&rotxn, Some("token_to_token_id"))
+        let db_token_to_roaringish_packed = env
+            .open_database(&rotxn, Some("token_to_roaringish_packed"))
             .unwrap()
             .unwrap();
 
-        let db_token_id_to_roaringish_packed = env
-            .database_options()
-            .types::<NativeU32, ZeroCopyCodec<RoaringishPacked>>()
-            .flags(DatabaseFlags::REVERSE_KEY)
-            .name("db_token_id_to_roaringish_packed")
-            .open(&rotxn)
-            .unwrap()
-            .unwrap();
-
-        let db_common_token_id_to_token = env
-            .database_options()
-            .types::<NativeU32, Str>()
-            .flags(DatabaseFlags::REVERSE_KEY)
-            .name("common_token_id_to_token")
-            .open(&rotxn)
-            .unwrap()
-            .unwrap();
-
-        let common_tokens = Self::read_common_tokens(&rotxn, db_common_token_id_to_token);
-        // let common_tokens = AHashSet::new();
+        let common_tokens = Self::read_common_tokens(&rotxn, db_main);
         let sorted: BTreeSet<_> = common_tokens.iter().collect();
-        rotxn.commit().unwrap();
-
         println!("Common tokens ({}): {sorted:?}", sorted.len());
+
+        rotxn.commit().unwrap();
 
         Self {
             env,
+            db_main,
             db_doc_id_to_document,
-            db_token_id_to_roaringish_packed,
-            db_token_to_token_id,
-            db_common_token_id_to_token,
+            db_token_to_roaringish_packed,
             common_tokens,
         }
-    }
-
-    fn read_common_tokens(
-        rotxn: &RoTxn,
-        db_common_token_id_to_token: Database<NativeU32, Str>,
-    ) -> AHashSet<Box<str>> {
-        db_common_token_id_to_token
-            .iter(rotxn)
-            .unwrap()
-            .map(|r| r.unwrap().1.to_string().into_boxed_str())
-            .collect()
     }
 
     #[inline(always)]
@@ -403,64 +359,14 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn single_token_search(&self, rotxn: &RoTxn, token: &str) -> Vec<u32> {
-        let Some(token_id) = self.db_token_to_token_id.get(rotxn, token).unwrap() else {
-            return Vec::new();
-        };
-
-        self.get_roaringish_packed(rotxn, token_id).get_doc_ids()
-    }
-
-    // pub fn get_documents_by_ids(&self, doc_ids: Vec<u32>)
-    // where
-    //     D: Display,
-    // {
-    //     // pub fn get_documents_by_ids(&self, doc_ids: Vec<u32>) -> Vec<D> {
-    //     let rdtxn = self.env.read_txn().unwrap();
-    //     for doc_id in doc_ids {
-    //         let k = self
-    //             .db_doc_id_to_document
-    //             .get(&rdtxn, &doc_id)
-    //             .unwrap()
-    //             .unwrap()
-    //             .deserialize(&mut rkyv::Infallible)
-    //             .unwrap();
-    //         println!("{k}");
-    //         // panic!()
-    //     }
-    //     // doc_ids
-    //     //     .into_iter()
-    //     //     .map(|doc_id| {
-    //     //         self.db_doc_id_to_document
-    //     //             .get(&rdtxn, &doc_id)
-    //     //             .unwrap()
-    //     //             .unwrap()
-    //     //             .deserialize(&mut rkyv::Infallible)
-    //     //             .unwrap()
-    //     //     })
-    //     //     .collect()
-    // }
-
-    pub(crate) fn get_token_id(&self, rotxn: &RoTxn, token: &str) -> Option<u32> {
-        unsafe {
-            self.db_token_to_token_id
-                .get(rotxn, token)
-                .unwrap_unchecked()
-        }
-    }
-
-    #[inline(always)]
     pub(crate) fn get_roaringish_packed<'a>(
         &self,
         rotxn: &'a RoTxn,
-        token_id: u32,
-    ) -> &'a ArchivedRoaringishPacked {
-        unsafe {
-            self.db_token_id_to_roaringish_packed
-                .get(rotxn, &token_id)
-                .unwrap_unchecked()
-                .unwrap_unchecked()
-        }
+        token: &str,
+    ) -> Option<&'a ArchivedRoaringishPacked> {
+        self.db_token_to_roaringish_packed
+            .get(rotxn, token)
+            .unwrap()
     }
 
     pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
@@ -477,7 +383,10 @@ where
 
         let rotxn = self.env.read_txn().unwrap();
         if tokens.len() == 1 {
-            return self.single_token_search(&rotxn, tokens.first().unwrap());
+            return self
+                .get_roaringish_packed(&rotxn, tokens.first().unwrap())
+                .map(|p| p.get_doc_ids())
+                .unwrap_or_default();
         }
 
         let b = std::time::Instant::now();
@@ -486,36 +395,34 @@ where
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         if final_tokens.len() == 1 {
-            return self.single_token_search(&rotxn, &final_tokens.first().unwrap().0);
+            return self
+                .get_roaringish_packed(&rotxn, &final_tokens.first().unwrap().0)
+                .map(|p| p.get_doc_ids())
+                .unwrap_or_default();
         }
 
         let deduped_tokens: AHashSet<_> = final_tokens.iter().map(|(t, _)| t).collect();
-        let mut token_to_token_id = AHashMap::with_capacity(deduped_tokens.len());
-        let mut token_id_to_packed = FxHashMap::with_capacity(deduped_tokens.len());
+        let mut token_to_packed = AHashMap::with_capacity(deduped_tokens.len());
         for token in deduped_tokens.iter() {
             let b = std::time::Instant::now();
-            let Some(token_id) = self.get_token_id(&rotxn, token) else {
+            let Some(packed) = self.get_roaringish_packed(&rotxn, token) else {
                 return Vec::new();
             };
+            token_to_packed.insert(*token, packed);
 
-            let pl = self.get_roaringish_packed(&rotxn, token_id);
             stats
                 .get_pls
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-            token_to_token_id.insert(*token, token_id);
-            token_id_to_packed.insert(token_id, pl);
         }
 
         let mut it = final_tokens.iter();
 
         let (lhs, lhs_len) = it.next().unwrap();
-        let lhs = token_to_token_id.get(lhs).unwrap();
-        let lhs = token_id_to_packed.get(lhs).unwrap();
+        let lhs = token_to_packed.get(lhs).unwrap();
 
         let (rhs, rhs_len) = it.next().unwrap();
-        let rhs = token_to_token_id.get(rhs).unwrap();
-        let rhs = token_id_to_packed.get(rhs).unwrap();
+        let rhs = token_to_packed.get(rhs).unwrap();
+
         let mut lhs = if *lhs_len > 1 {
             let b = std::time::Instant::now();
             let lhs = *lhs + (*lhs_len - 1);
@@ -528,8 +435,7 @@ where
         };
 
         for (t, t_len) in it {
-            let rhs = token_to_token_id.get(t).unwrap();
-            let rhs = token_id_to_packed.get(rhs).unwrap();
+            let rhs = token_to_packed.get(t).unwrap();
             lhs = lhs.intersect::<I, _>(*rhs, *t_len, stats);
         }
         lhs.get_doc_ids()
