@@ -15,66 +15,6 @@ use crate::Stats;
 
 use self::intersect::Intersect;
 
-#[derive(Default, Serialize, Deserialize, Archive)]
-pub struct Roaringish {
-    pub(crate) inner: Vec<u32>,
-}
-
-impl Binary for Roaringish {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut list = f.debug_list();
-        for packed in self.inner.iter() {
-            list.entry_with(|f| {
-                f.write_fmt(format_args!(
-                    "{:016b} {:016b}",
-                    get_group(*packed),
-                    get_encoded_positions(*packed)
-                ))
-            });
-        }
-
-        list.finish()
-    }
-}
-
-impl Debug for Roaringish {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut list = f.debug_list();
-        for packed in self.inner.iter() {
-            list.entry_with(|f| {
-                f.debug_tuple("")
-                    .field(&get_group(*packed))
-                    .field_with(|f| {
-                        let encoded_values = get_encoded_positions(*packed);
-                        f.debug_list()
-                            .entries(
-                                (0..16u32)
-                                    .filter_map(|i| ((encoded_values >> i) & 1 == 1).then_some(i)),
-                            )
-                            .finish()
-                    })
-                    .finish()
-            });
-        }
-        list.finish()
-    }
-}
-
-impl Display for Roaringish {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let it = self.inner.iter().flat_map(|packed| {
-            let group = get_group(*packed);
-            let encoded_values = get_encoded_positions(*packed);
-            let s = group * 16;
-            (0..16u32)
-                .filter_map(move |i| ((encoded_values >> i) & 1 == 1).then_some(i))
-                .map(move |i| s + i)
-        });
-
-        f.debug_list().entries(it).finish()
-    }
-}
-
 pub const MAX_VALUE: u32 = 16u32 * u16::MAX as u32;
 
 const fn group(val: u32) -> u32 {
@@ -89,20 +29,12 @@ const fn gv(val: u32) -> (u32, u16) {
     (group(val), value(val))
 }
 
-const fn make_group(group: u32) -> u32 {
-    group << 16
-}
-
 const fn get_group(packed: u32) -> u32 {
     packed >> 16
 }
 
 const fn make_position(value: u16) -> u16 {
     1 << value
-}
-
-const fn get_encoded_positions(packed: u32) -> u32 {
-    packed & 0x0000FFFF
 }
 
 const fn make_doc_id(doc_id: u32) -> u64 {
@@ -115,55 +47,6 @@ const fn get_doc_id(packed: u64) -> u32 {
 
 const fn get_group_from_doc_id_group(packed: u64) -> u32 {
     (packed & 0x00000000FFFF) as u32
-}
-
-impl Roaringish {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn from_positions(mut pos: Vec<u32>) -> Self {
-        pos.sort_unstable();
-        Self::from_positions_sorted(pos)
-    }
-
-    pub fn from_positions_sorted(mut pos: Vec<u32>) -> Self {
-        if pos.is_empty() {
-            return Self::new();
-        }
-
-        let mut values: Box<[MaybeUninit<u32>]> = Box::new_uninit_slice(pos.len());
-        unsafe {
-            assume(values.len() == pos.len());
-        }
-        for (pos, v) in pos.iter_mut().zip(values.iter_mut()) {
-            let (group, value) = gv(*pos);
-            *pos = group;
-            v.write(value as u32);
-        }
-        let groups = pos;
-        let values = unsafe { values.assume_init() };
-
-        let mut inner = Vec::new();
-        let mut b = 0;
-        for groups in groups.chunk_by(|g0, g1| g0 == g1) {
-            let values = unsafe { values.get_unchecked(b..(b + groups.len())) };
-            b += groups.len();
-
-            unsafe {
-                assume(values.len() <= 16);
-            }
-
-            let mut packed = make_group(groups[0]);
-            for value in values {
-                packed |= make_position(*value as u16) as u32;
-            }
-
-            inner.push(packed);
-        }
-
-        Self { inner }
-    }
 }
 
 #[derive(Default, Debug)]

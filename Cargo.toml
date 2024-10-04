@@ -14,6 +14,7 @@ rayon = "1.10.0"
 clap = { version = "4.5.18", features = ["derive"] }
 arbitrary = { version = "1.3.2", features = ["derive"] }
 rkyv = { version = "0.8.8", features = ["unaligned"] }
+memmap2 = "0.9.5"
 
 [dev-dependencies]
 criterion = "0.5.1"

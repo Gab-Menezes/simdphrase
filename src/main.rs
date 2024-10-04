@@ -3,6 +3,7 @@
 #![feature(maybe_uninit_slice)]
 #![feature(avx512_target_feature)]
 #![feature(stdarch_x86_avx512)]
+#![feature(pointer_is_aligned_to)]
 
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
