@@ -37,11 +37,9 @@ pub trait Intersect: private::IntersectSeal {
             rhs,
             &mut lhs_i,
             &mut rhs_i,
-
             &mut doc_id_groups_result,
             &mut values_result,
             &mut i,
-
             &mut msb_doc_id_groups_result,
             &mut j,
         );

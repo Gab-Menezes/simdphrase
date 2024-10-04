@@ -17,9 +17,7 @@ use rkyv::{
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    roaringish::{
-        intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked,
-    },
+    roaringish::{intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked},
     tokenize,
     utils::MAX_SEQ_LEN,
 };

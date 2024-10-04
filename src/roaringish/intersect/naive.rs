@@ -7,18 +7,18 @@ use super::{private::IntersectSeal, Intersect};
 pub struct NaiveIntersect;
 impl IntersectSeal for NaiveIntersect {}
 
-impl Intersect for NaiveIntersect {    
+impl Intersect for NaiveIntersect {
     fn inner_intersect<const FIRST: bool, L: Packed, R: Packed>(
         lhs: &BorrowRoaringishPacked<L>,
         rhs: &BorrowRoaringishPacked<R>,
-    
+
         lhs_i: &mut usize,
         rhs_i: &mut usize,
-    
+
         doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
         values_result: &mut Box<[MaybeUninit<u16>]>,
         i: &mut usize,
-    
+
         msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
         j: &mut usize,
     ) {
@@ -34,9 +34,7 @@ impl Intersect for NaiveIntersect {
                     let rhs = (*rhs.values.get_unchecked(*rhs_i)).into();
                     if FIRST {
                         let lhs = (*lhs.values.get_unchecked(*lhs_i)).into();
-                        values_result
-                            .get_unchecked_mut(*i)
-                            .write((lhs << 1) & rhs);
+                        values_result.get_unchecked_mut(*i).write((lhs << 1) & rhs);
 
                         msb_doc_id_groups_result
                             .get_unchecked_mut(*j)

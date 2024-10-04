@@ -108,9 +108,7 @@ impl RoaringishPacked {
             self.doc_id_groups
                 .push_within_capacity(doc_id_group)
                 .unwrap_unchecked();
-            self.values
-                .push_within_capacity(value)
-                .unwrap_unchecked();
+            self.values.push_within_capacity(value).unwrap_unchecked();
         }
 
         for p in it {
@@ -128,9 +126,7 @@ impl RoaringishPacked {
                     self.doc_id_groups
                         .push_within_capacity(doc_id_group)
                         .unwrap_unchecked();
-                    self.values
-                        .push_within_capacity(value)
-                        .unwrap_unchecked();
+                    self.values.push_within_capacity(value).unwrap_unchecked();
                 }
             }
         }
@@ -418,8 +414,7 @@ pub trait Packed {
         let packed = unsafe {
             let doc_id_groups =
                 Vec::from_raw_parts(Box::into_raw(r_doc_id_groups) as *mut _, r_i, capacity);
-            let values =
-                Vec::from_raw_parts(Box::into_raw(r_values) as *mut _, r_i, capacity);
+            let values = Vec::from_raw_parts(Box::into_raw(r_values) as *mut _, r_i, capacity);
             RoaringishPacked {
                 doc_id_groups,
                 values,
@@ -512,18 +507,16 @@ impl Binary for RoaringishPacked {
 
 impl Display for RoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let it = self
-            .doc_id_groups
-            .iter()
-            .zip(self.values.iter())
-            .flat_map(|(doc_id_group, encoded_values)| {
+        let it = self.doc_id_groups.iter().zip(self.values.iter()).flat_map(
+            |(doc_id_group, encoded_values)| {
                 let doc_id = get_doc_id(*doc_id_group);
                 let group = get_group_from_doc_id_group(*doc_id_group);
                 let s = group * 16;
                 (0..16u32)
                     .filter_map(move |i| ((encoded_values >> i) & 1 == 1).then_some(i))
                     .map(move |i| (doc_id, s + i))
-            });
+            },
+        );
         f.debug_list().entries(it).finish()
     }
 }
@@ -542,8 +535,7 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
             }
         }
 
-        let values: Result<Vec<u16>, _> =
-            u.arbitrary_iter()?.take(doc_id_groups.len()).collect();
+        let values: Result<Vec<u16>, _> = u.arbitrary_iter()?.take(doc_id_groups.len()).collect();
         let values = values?;
 
         if doc_id_groups.len() != values.len() {

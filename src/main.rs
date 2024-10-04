@@ -105,7 +105,6 @@ where
             //     .status()
             //     .unwrap();
 
-
             let doc_ids = searcher.search::<Intersect>(q, &stats);
         }
         let e = b.elapsed().as_micros();
