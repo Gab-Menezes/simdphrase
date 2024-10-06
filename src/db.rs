@@ -529,20 +529,20 @@ where
                 .add_lhs
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-            let lhs = BorrowRoaringishPacked::from(&lhs);
+            let lhs = BorrowRoaringishPacked::new(&lhs);
             lhs.intersect::<I>(rhs, *rhs_len, stats)
         } else {
             lhs.intersect::<I>(rhs, *rhs_len, stats)
         };
-        let mut borrow_lhs = BorrowRoaringishPacked::from(&lhs);
+        let mut borrow_lhs = BorrowRoaringishPacked::new(&lhs);
 
         for (t, t_len) in it {
             let rhs = token_to_packed.get(t).unwrap();
             lhs = borrow_lhs.intersect::<I>(rhs, *t_len, stats);
-            borrow_lhs = BorrowRoaringishPacked::from(&lhs);
+            borrow_lhs = BorrowRoaringishPacked::new(&lhs);
         }
 
-        borrow_lhs = BorrowRoaringishPacked::from(&lhs);
+        borrow_lhs = BorrowRoaringishPacked::new(&lhs);
         borrow_lhs.get_doc_ids()
     }
 }

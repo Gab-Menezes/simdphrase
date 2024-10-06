@@ -21,13 +21,13 @@ fuzz_target!(|r: (RoaringishPacked, RoaringishPacked)| {
     let lhs = BorrowRoaringishPacked::new(&r.0);
     let rhs = BorrowRoaringishPacked::new(&r.1);
     
-    let naive = NaiveIntersect::intersect::<true, _, _>(&lhs, &rhs);
-    let simd = SimdIntersect::intersect::<true, _, _>(&lhs, &rhs);
+    let naive = NaiveIntersect::intersect::<true>(&lhs, &rhs);
+    let simd = SimdIntersect::intersect::<true>(&lhs, &rhs);
 
     compare(&naive, &simd);
 
-    let naive = NaiveIntersect::intersect::<false, _, _>(&lhs, &rhs);
-    let simd = SimdIntersect::intersect::<false, _, _>(&lhs, &rhs);
+    let naive = NaiveIntersect::intersect::<false>(&lhs, &rhs);
+    let simd = SimdIntersect::intersect::<false>(&lhs, &rhs);
 
     compare(&naive, &simd);
 });

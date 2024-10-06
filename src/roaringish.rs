@@ -62,15 +62,6 @@ impl Default for RoaringishPacked {
     }
 }
 
-impl<'a> From<&'a RoaringishPacked> for BorrowRoaringishPacked<'a> {
-    fn from(packed: &'a RoaringishPacked) -> Self {
-        BorrowRoaringishPacked {
-            doc_id_groups: &packed.doc_id_groups,
-            values: &packed.values,
-        }
-    }
-}
-
 impl RoaringishPacked {
     pub fn size_bytes(&self) -> usize {
         self.doc_id_groups.len() * std::mem::size_of::<u64>()
@@ -127,7 +118,14 @@ pub struct BorrowRoaringishPacked<'a> {
 }
 
 impl<'a> BorrowRoaringishPacked<'a> {
-    pub fn new(doc_id_groups: &'a [u64], values: &'a [u16]) -> Self {
+    pub fn new(packed: &'a RoaringishPacked) -> Self {
+        BorrowRoaringishPacked {
+            doc_id_groups: &packed.doc_id_groups,
+            values: &packed.values,
+        }
+    }
+
+    pub fn new_raw(doc_id_groups: &'a [u64], values: &'a [u16]) -> Self {
         Self {
             doc_id_groups,
             values,
@@ -185,7 +183,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = BorrowRoaringishPacked::new(&msb_doc_id_groups, &[]);
+        let msb_packed = BorrowRoaringishPacked::new_raw(&msb_doc_id_groups, &[]);
         let b = std::time::Instant::now();
         let (msb_doc_id_groups, msb_values_intersect, _) = I::intersect::<false>(&msb_packed, &rhs);
         stats
@@ -301,7 +299,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
         };
         if rhs_len > 1 {
             let b = std::time::Instant::now();
-            let borrow = BorrowRoaringishPacked::from(&packed);
+            let borrow = BorrowRoaringishPacked::new(&packed);
             let r = &borrow + (rhs_len - 1);
             stats
                 .add_rhs
