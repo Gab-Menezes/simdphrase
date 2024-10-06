@@ -349,7 +349,7 @@ impl Intersect for SimdIntersect {
         msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
     ) {
-        use std::arch::x86_64::_mm256_loadu_si256;
+        use std::arch::x86_64::_mm256_load_si256;
 
         let end_lhs = lhs.doc_id_groups.len() / N * N;
         let end_rhs = rhs.doc_id_groups.len() / N * N;
@@ -367,8 +367,8 @@ impl Intersect for SimdIntersect {
 
         while *lhs_i < a.len() && *rhs_i < b.len() {
             let (va, vb) = unsafe {
-                let va = _mm256_loadu_si256(a.as_ptr().add(*lhs_i) as *const _);
-                let vb = _mm256_loadu_si256(b.as_ptr().add(*rhs_i) as *const _);
+                let va = _mm256_load_si256(a.as_ptr().add(*lhs_i) as *const _);
+                let vb = _mm256_load_si256(b.as_ptr().add(*rhs_i) as *const _);
                 (va, vb)
             };
 
