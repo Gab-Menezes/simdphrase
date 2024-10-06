@@ -31,3 +31,4 @@ pub use roaringish::BorrowRoaringishPacked;
 pub use roaringish::RoaringishPacked;
 pub use searcher::Searcher;
 pub use utils::{normalize, tokenize};
+pub use allocator::Aligned64;

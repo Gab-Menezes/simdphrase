@@ -1,3 +1,5 @@
+#![feature(allocator_api)]
+
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -6,8 +8,9 @@ use phrase_search::BorrowRoaringishPacked;
 use phrase_search::naive::NaiveIntersect;
 use phrase_search::Intersect;
 use phrase_search::simd::SimdIntersect;
+use phrase_search::Aligned64;
 
-fn compare(lhs: &(Vec<u64>, Vec<u16>, Vec<u64>), rhs: &(Vec<u64>, Vec<u16>, Vec<u64>)) {
+fn compare(lhs: &(Vec<u64, Aligned64>, Vec<u16, Aligned64>, Vec<u64, Aligned64>), rhs: &(Vec<u64, Aligned64>, Vec<u16, Aligned64>, Vec<u64, Aligned64>)) {
     assert_eq!(lhs.0, rhs.0);
     assert_eq!(lhs.1, rhs.1);
     assert!(lhs.2.len() <= rhs.2.len());
