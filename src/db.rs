@@ -456,10 +456,7 @@ where
         assert!(l.is_empty());
         assert!(r.is_empty());
 
-        Some(BorrowRoaringishPacked {
-            doc_id_groups,
-            values,
-        })
+        unsafe { Some(BorrowRoaringishPacked::new_raw(doc_id_groups, values)) }
     }
 
     pub fn search<I: Intersect>(

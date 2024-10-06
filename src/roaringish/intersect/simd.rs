@@ -7,7 +7,7 @@ use std::{
     simd::{cmp::SimdPartialOrd, Simd},
 };
 
-use crate::roaringish::{BorrowRoaringishPacked};
+use crate::roaringish::{BorrowRoaringishPacked, Aligned64};
 
 use super::naive::NaiveIntersect;
 use super::{private::IntersectSeal, Intersect};
@@ -214,15 +214,15 @@ impl Intersect for SimdIntersect {
         lhs_i: &mut usize,
         rhs_i: &mut usize,
 
-        doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
-        values_result: &mut Box<[MaybeUninit<u16>]>,
+        doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
         i: &mut usize,
 
-        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
+        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
     ) {
         use std::arch::x86_64::{
-            _mm512_loadu_epi64, _mm512_mask_compressstoreu_epi64, _mm_loadu_epi16,
+            _mm512_load_epi64, _mm512_mask_compressstoreu_epi64, _mm_load_si128,
             _mm_maskz_compress_epi16, _mm_storeu_epi16,
         };
 
@@ -230,7 +230,11 @@ impl Intersect for SimdIntersect {
         let end_rhs = rhs.doc_id_groups.len() / N * N;
         let a = unsafe { lhs.doc_id_groups.get_unchecked(..end_lhs) };
         let b = unsafe { rhs.doc_id_groups.get_unchecked(..end_rhs) };
-        let a_values = unsafe { lhs.values.get_unchecked(..end_lhs) };
+        let a_values = if FIRST {
+            unsafe { lhs.values.get_unchecked(..end_lhs) }
+        } else {
+            &lhs.values
+        };
         let b_values = unsafe { rhs.values.get_unchecked(..end_rhs) };
         let mut need_to_analyze_msb = false;
         unsafe {
@@ -242,8 +246,8 @@ impl Intersect for SimdIntersect {
 
         while *lhs_i < a.len() && *rhs_i < b.len() {
             let (va, vb) = unsafe {
-                let va = _mm512_loadu_epi64(a.as_ptr().add(*lhs_i) as *const _);
-                let vb = _mm512_loadu_epi64(b.as_ptr().add(*rhs_i) as *const _);
+                let va = _mm512_load_epi64(a.as_ptr().add(*lhs_i) as *const _);
+                let vb = _mm512_load_epi64(b.as_ptr().add(*rhs_i) as *const _);
                 (va, vb)
             };
 
@@ -259,14 +263,14 @@ impl Intersect for SimdIntersect {
 
                 let vb_values: Simd<u16, N> = _mm_maskz_compress_epi16(
                     mask_b,
-                    _mm_loadu_epi16(b_values.as_ptr().add(*rhs_i) as *const _),
+                    _mm_load_si128(b_values.as_ptr().add(*rhs_i) as *const _),
                 )
                 .into();
 
                 if FIRST {
                     let va_values: Simd<u16, N> = _mm_maskz_compress_epi16(
                         mask_a,
-                        _mm_loadu_epi16(a_values.as_ptr().add(*lhs_i) as *const _),
+                        _mm_load_si128(a_values.as_ptr().add(*lhs_i) as *const _),
                     )
                     .into();
 
@@ -306,7 +310,7 @@ impl Intersect for SimdIntersect {
             && !(*lhs_i < lhs.doc_id_groups.len() && *rhs_i < rhs.doc_id_groups.len())
         {
             unsafe {
-                let va = _mm512_loadu_epi64(a.as_ptr().add(*lhs_i) as *const _);
+                let va = _mm512_load_epi64(a.as_ptr().add(*lhs_i) as *const _);
                 analyze_msb(va, a_values, *lhs_i, msb_doc_id_groups_result, j);
             };
         }
@@ -338,11 +342,11 @@ impl Intersect for SimdIntersect {
         lhs_i: &mut usize,
         rhs_i: &mut usize,
 
-        doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
-        values_result: &mut Box<[MaybeUninit<u16>]>,
+        doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
         i: &mut usize,
 
-        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
+        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
     ) {
         use std::arch::x86_64::_mm256_loadu_si256;

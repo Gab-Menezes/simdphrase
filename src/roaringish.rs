@@ -118,6 +118,10 @@ pub struct BorrowRoaringishPacked<'a> {
 }
 
 impl<'a> BorrowRoaringishPacked<'a> {
+    pub unsafe fn new_raw(doc_id_groups: &'a [u64], values: &'a [u16]) -> Self {
+        Self { doc_id_groups, values }
+    }
+
     pub fn new(packed: &'a RoaringishPacked) -> Self {
         BorrowRoaringishPacked {
             doc_id_groups: &packed.doc_id_groups,
@@ -125,10 +129,10 @@ impl<'a> BorrowRoaringishPacked<'a> {
         }
     }
 
-    pub fn new_raw(doc_id_groups: &'a [u64], values: &'a [u16]) -> Self {
+    pub fn new_doc_id_groups(doc_id_groups: &'a Vec<u64, Aligned64>) -> Self {
         Self {
-            doc_id_groups,
-            values,
+            doc_id_groups: &doc_id_groups,
+            values: &[],
         }
     }
 
@@ -183,7 +187,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = BorrowRoaringishPacked::new_raw(&msb_doc_id_groups, &[]);
+        let msb_packed = BorrowRoaringishPacked::new_doc_id_groups(&msb_doc_id_groups);
         let b = std::time::Instant::now();
         let (msb_doc_id_groups, msb_values_intersect, _) = I::intersect::<false>(&msb_packed, &rhs);
         stats
@@ -280,18 +284,12 @@ impl<'a> BorrowRoaringishPacked<'a> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let packed = unsafe {
-            let doc_id_groups = Vec::from_raw_parts_in(
-                Box::into_raw(r_doc_id_groups) as *mut _,
-                r_i,
-                capacity,
-                Aligned64::default(),
-            );
-            let values = Vec::from_raw_parts_in(
-                Box::into_raw(r_values) as *mut _,
-                r_i,
-                capacity,
-                Aligned64::default(),
-            );
+            let (p_doc_id_groups, a0) = Box::into_raw_with_allocator(r_doc_id_groups);
+            let doc_id_groups =
+                Vec::from_raw_parts_in(p_doc_id_groups as *mut _, r_i, capacity, a0);
+
+            let (p_values, a1) = Box::into_raw_with_allocator(r_values);
+            let values = Vec::from_raw_parts_in(p_values as *mut _, r_i, capacity, a1);
             RoaringishPacked {
                 doc_id_groups,
                 values,
@@ -364,60 +362,6 @@ impl<'a> Add<u32> for &BorrowRoaringishPacked<'a> {
         }
     }
 }
-
-// impl Add<u32> for &RoaringishPacked {
-//     type Output = RoaringishPacked;
-
-//     fn add(self, rhs: u32) -> Self::Output {
-//         unsafe {
-//             assume(self.doc_id_groups.len() == self.values.len());
-//         }
-
-//         let n = self.doc_id_groups.len() * 2;
-//         let mut doc_id_groups = Box::new_uninit_slice_in(n, Aligned64::default());
-//         let mut values = Box::new_uninit_slice_in(n, Aligned64::default());
-//         let mut i = 0;
-
-//         let mask = u16::MAX << rhs;
-//         let bits_to_check = !mask;
-//         for (doc_id_group, packed_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
-//             let new_values = packed_values.rotate_left(rhs);
-//             let postions_current_group = new_values & mask;
-//             let postions_new_group = new_values & bits_to_check;
-//             if postions_current_group > 0 {
-//                 unsafe {
-//                     doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
-//                     values.get_unchecked_mut(i).write(postions_current_group);
-//                     i += 1;
-//                 }
-//             }
-//             if postions_new_group > 0 {
-//                 unsafe {
-//                     doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + 1);
-//                     values.get_unchecked_mut(i).write(postions_new_group);
-//                     i += 1;
-//                 }
-//             }
-//         }
-
-//         unsafe {
-//             RoaringishPacked {
-//                 doc_id_groups: Vec::from_raw_parts_in(
-//                     Box::into_raw(doc_id_groups) as *mut _,
-//                     i,
-//                     n,
-//                     Aligned64::default(),
-//                 ),
-//                 values: Vec::from_raw_parts_in(
-//                     Box::into_raw(values) as *mut _,
-//                     i,
-//                     n,
-//                     Aligned64::default(),
-//                 ),
-//             }
-//         }
-//     }
-// }
 
 impl Binary for RoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

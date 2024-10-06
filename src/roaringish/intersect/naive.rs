@@ -1,6 +1,6 @@
 use std::mem::MaybeUninit;
 
-use crate::roaringish::BorrowRoaringishPacked;
+use crate::{allocator::Aligned64, roaringish::BorrowRoaringishPacked};
 
 use super::{private::IntersectSeal, Intersect};
 
@@ -15,11 +15,11 @@ impl Intersect for NaiveIntersect {
         lhs_i: &mut usize,
         rhs_i: &mut usize,
 
-        doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
-        values_result: &mut Box<[MaybeUninit<u16>]>,
+        doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
         i: &mut usize,
 
-        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>]>,
+        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
     ) {
         while *lhs_i < lhs.doc_id_groups.len() && *rhs_i < rhs.doc_id_groups.len() {
