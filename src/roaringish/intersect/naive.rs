@@ -1,6 +1,6 @@
 use std::mem::MaybeUninit;
 
-use crate::roaringish::{BorrowRoaringishPacked, Packed};
+use crate::roaringish::BorrowRoaringishPacked;
 
 use super::{private::IntersectSeal, Intersect};
 
@@ -8,9 +8,9 @@ pub struct NaiveIntersect;
 impl IntersectSeal for NaiveIntersect {}
 
 impl Intersect for NaiveIntersect {
-    fn inner_intersect<const FIRST: bool, L: Packed, R: Packed>(
-        lhs: &BorrowRoaringishPacked<L>,
-        rhs: &BorrowRoaringishPacked<R>,
+    fn inner_intersect<const FIRST: bool>(
+        lhs: &BorrowRoaringishPacked,
+        rhs: &BorrowRoaringishPacked,
 
         lhs_i: &mut usize,
         rhs_i: &mut usize,
@@ -23,17 +23,17 @@ impl Intersect for NaiveIntersect {
         j: &mut usize,
     ) {
         while *lhs_i < lhs.doc_id_groups.len() && *rhs_i < rhs.doc_id_groups.len() {
-            let lhs_doc_id_groups = unsafe { (*lhs.doc_id_groups.get_unchecked(*lhs_i)).into() };
-            let rhs_doc_id_groups = unsafe { (*rhs.doc_id_groups.get_unchecked(*rhs_i)).into() };
+            let lhs_doc_id_groups = unsafe { *lhs.doc_id_groups.get_unchecked(*lhs_i) };
+            let rhs_doc_id_groups = unsafe { *rhs.doc_id_groups.get_unchecked(*rhs_i) };
 
             if lhs_doc_id_groups == rhs_doc_id_groups {
                 unsafe {
                     doc_id_groups_result
                         .get_unchecked_mut(*i)
                         .write(lhs_doc_id_groups);
-                    let rhs = (*rhs.values.get_unchecked(*rhs_i)).into();
+                    let rhs = *rhs.values.get_unchecked(*rhs_i);
                     if FIRST {
-                        let lhs = (*lhs.values.get_unchecked(*lhs_i)).into();
+                        let lhs = *lhs.values.get_unchecked(*lhs_i);
                         values_result.get_unchecked_mut(*i).write((lhs << 1) & rhs);
 
                         msb_doc_id_groups_result
@@ -52,7 +52,7 @@ impl Intersect for NaiveIntersect {
             } else {
                 if FIRST {
                     unsafe {
-                        let lhs = (*lhs.values.get_unchecked(*lhs_i)).into();
+                        let lhs = *lhs.values.get_unchecked(*lhs_i);
                         msb_doc_id_groups_result
                             .get_unchecked_mut(*j)
                             .write(lhs_doc_id_groups + 1);
@@ -64,9 +64,9 @@ impl Intersect for NaiveIntersect {
         }
     }
 
-    fn intersection_buffer_size<L: Packed, R: Packed>(
-        lhs: &BorrowRoaringishPacked<L>,
-        rhs: &BorrowRoaringishPacked<R>,
+    fn intersection_buffer_size(
+        lhs: &BorrowRoaringishPacked,
+        rhs: &BorrowRoaringishPacked,
     ) -> usize {
         lhs.doc_id_groups.len().min(rhs.doc_id_groups.len())
     }

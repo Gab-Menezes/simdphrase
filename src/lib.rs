@@ -11,6 +11,7 @@
 #![feature(stdarch_x86_avx512)]
 #![feature(avx512_target_feature)]
 #![feature(maybe_uninit_uninit_array)]
+#![feature(allocator_api)]
 
 mod codecs;
 mod db;
@@ -18,6 +19,7 @@ mod indexer;
 mod roaringish;
 mod searcher;
 mod utils;
+mod allocator;
 
 pub use db::{Stats, DB};
 pub use indexer::CommonTokens;

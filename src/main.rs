@@ -4,6 +4,7 @@
 #![feature(avx512_target_feature)]
 #![feature(stdarch_x86_avx512)]
 #![feature(pointer_is_aligned_to)]
+#![feature(allocator_api)]
 
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -14,10 +15,7 @@ use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 use std::{
-    fmt::Debug,
-    fs::File,
-    io::{BufRead, BufReader},
-    path::PathBuf,
+    alloc::{alloc, dealloc, Allocator}, fmt::Debug, fs::File, io::{BufRead, BufReader}, path::PathBuf, ptr::NonNull
 };
 
 #[derive(Parser, Debug)]

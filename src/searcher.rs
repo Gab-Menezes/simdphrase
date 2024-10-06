@@ -1,5 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
+use memmap2::Mmap;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
@@ -12,7 +16,7 @@ where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive,
 {
-    pub(crate) shards: Box<[DB<D>]>,
+    pub(crate) shards: Box<[(DB<D>, HashSet<String>, Mmap)]>,
 }
 
 impl<D> Searcher<D>
@@ -36,12 +40,12 @@ where
     pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
         self.shards
             .iter()
-            .flat_map(|shard| shard.search::<I>(q, stats))
+            .flat_map(|shard| shard.0.search::<I>(q, stats, &shard.1, &shard.2))
             .collect()
     }
 
     pub fn get_shard(&self, idx: usize) -> Option<&DB<D>> {
-        self.shards.get(idx)
+        self.shards.get(idx).map(|shard| &shard.0)
     }
 
     // pub fn foo(&self, q: &str)
@@ -68,7 +72,7 @@ where
     pub fn par_search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
         self.shards
             .par_iter()
-            .map(|shard| shard.search::<I>(q, stats))
+            .map(|shard| shard.0.search::<I>(q, stats, &shard.1, &shard.2))
             .flatten()
             .collect()
     }

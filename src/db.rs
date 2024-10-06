@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeSet, HashSet},
     fmt::Debug,
+    fs::File,
     path::Path,
     sync::atomic::{AtomicU64, Ordering::Relaxed},
 };
@@ -11,6 +12,7 @@ use heed::{
     types::Str, Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
     Unspecified,
 };
+use memmap2::{Mmap, MmapMut};
 use rkyv::{
     api::high::HighSerializer, deserialize, ser::allocator::ArenaHandle, util::AlignedVec, Archive,
     Deserialize, Serialize,
@@ -19,10 +21,18 @@ use rkyv::{
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    roaringish::{intersect::Intersect, ArchivedRoaringishPacked, Packed, RoaringishPacked},
+    roaringish::{intersect::Intersect, RoaringishPacked},
     tokenize,
     utils::MAX_SEQ_LEN,
+    BorrowRoaringishPacked,
 };
+
+mod db_constants {
+    pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
+    pub const DB_TOKEN_TO_OFFSETS: &'static str = "token_to_offsets";
+    pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
+    pub const ROARINGISH_PACKED_FILE: &'static str = "roaringish_packed";
+}
 
 #[derive(Default)]
 pub struct Stats {
@@ -138,6 +148,13 @@ impl Debug for Stats {
     }
 }
 
+#[derive(Debug, Serialize, Archive)]
+struct Offset {
+    begin: u64,
+    doc_id_group_len: u64,
+    values_len: u64,
+}
+
 pub struct DB<D>
 where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
@@ -146,8 +163,7 @@ where
     pub(crate) env: Env,
     db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
-    db_token_to_roaringish_packed: Database<Str, ZeroCopyCodec<RoaringishPacked>>,
-    common_tokens: HashSet<String>,
+    db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
 }
 
 unsafe impl<D> Send for DB<D> where
@@ -191,12 +207,12 @@ where
             .database_options()
             .types::<NativeU32, ZeroCopyCodec<D>>()
             .flags(DatabaseFlags::REVERSE_KEY)
-            .name("doc_id_to_document")
+            .name(db_constants::DB_DOC_ID_TO_DOCUMENT)
             .create(&mut wrtxn)
             .unwrap();
 
-        let db_token_to_roaringish_packed = env
-            .create_database(&mut wrtxn, Some("token_to_roaringish_packed"))
+        let db_token_to_offsets = env
+            .create_database(&mut wrtxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))
             .unwrap();
 
         wrtxn.commit().unwrap();
@@ -205,8 +221,7 @@ where
             env,
             db_main,
             db_doc_id_to_document,
-            db_token_to_roaringish_packed,
-            common_tokens: HashSet::default(),
+            db_token_to_offsets,
         }
     }
 
@@ -232,10 +247,67 @@ where
         let mut token_to_token_id: Vec<_> = token_to_token_id.iter().collect();
         token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
 
+        let size: usize = token_id_to_roaringish_packed
+            .iter()
+            .map(|p| p.size_bytes() + 64 + 16)
+            .sum();
+
+        let file = File::options()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(self.env.path().join(db_constants::ROARINGISH_PACKED_FILE))
+            .unwrap();
+        file.set_len(size as u64).unwrap();
+        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+        let mut i = 0;
+
+        #[inline(always)]
+        fn to_bytes<T>(v: &[T]) -> &[u8] {
+            unsafe {
+                let s = v.len() * std::mem::size_of::<T>();
+                let t = std::ptr::slice_from_raw_parts(v as *const _ as *const _, s);
+                &*t
+            }
+        }
+
+        #[inline(always)]
+        unsafe fn write_to_mmap<T, const N: usize>(
+            mmap: &mut MmapMut,
+            i: &mut usize,
+            v: &[T],
+        ) -> (usize, usize) {
+            let ptr = mmap.as_ptr().add(*i);
+            let offset = ptr.align_offset(N);
+            if *i + offset >= mmap.len() {
+                panic!("We fucked up, writing out of bounds");
+            }
+            *i += offset;
+            let bytes = to_bytes(&v);
+            mmap[*i..*i + bytes.len()].copy_from_slice(bytes);
+
+            let begin = *i;
+            *i += bytes.len();
+            (begin, bytes.len())
+        }
+
         for (token, token_id) in token_to_token_id.iter() {
             let roaringish_packed = &token_id_to_roaringish_packed[**token_id as usize];
-            self.db_token_to_roaringish_packed
-                .put_with_flags(rwtxn, PutFlags::APPEND, token, roaringish_packed)
+            let offset = unsafe {
+                let (begin, doc_id_group_len) =
+                    write_to_mmap::<_, 64>(&mut mmap, &mut i, &roaringish_packed.doc_id_groups);
+                let (_, values_len) =
+                    write_to_mmap::<_, 16>(&mut mmap, &mut i, &roaringish_packed.values);
+                Offset {
+                    begin: begin as u64,
+                    doc_id_group_len: doc_id_group_len as u64,
+                    values_len: values_len as u64,
+                }
+            };
+
+            self.db_token_to_offsets
+                .put_with_flags(rwtxn, PutFlags::APPEND, token, &offset)
                 .unwrap();
         }
     }
@@ -246,7 +318,7 @@ where
     ) -> HashSet<String> {
         let k = db_main
             .remap_types::<Str, ZeroCopyCodec<HashSet<String>>>()
-            .get(rotxn, "common_tokens")
+            .get(rotxn, db_constants::KEY_COMMON_TOKENS)
             .unwrap()
             .unwrap();
 
@@ -266,18 +338,11 @@ where
 
         self.db_main
             .remap_types::<Str, ZeroCopyCodec<HashSet<String>>>()
-            .put(rwtxn, "common_tokens", &common_tokens)
+            .put(rwtxn, db_constants::KEY_COMMON_TOKENS, &common_tokens)
             .unwrap();
     }
-}
 
-impl<D> DB<D>
-where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive
-        + 'static,
-{
-    pub fn open(path: &Path, db_size: usize) -> Self {
+    pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<String>, Mmap) {
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)
@@ -295,37 +360,45 @@ where
             .database_options()
             .types::<NativeU32, ZeroCopyCodec<D>>()
             .flags(DatabaseFlags::REVERSE_KEY)
-            .name("doc_id_to_document")
+            .name(db_constants::DB_DOC_ID_TO_DOCUMENT)
             .open(&rotxn)
             .unwrap()
             .unwrap();
 
-        let db_token_to_roaringish_packed = env
-            .open_database(&rotxn, Some("token_to_roaringish_packed"))
+        let db_token_to_offsets = env
+            .open_database(&rotxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))
             .unwrap()
             .unwrap();
 
         let common_tokens = Self::read_common_tokens(&rotxn, db_main);
-        let sorted: BTreeSet<_> = common_tokens.iter().collect();
-        println!("Common tokens ({}): {sorted:?}", sorted.len());
 
         rotxn.commit().unwrap();
 
-        Self {
-            env,
-            db_main,
-            db_doc_id_to_document,
-            db_token_to_roaringish_packed,
+        let mmap_file = File::open(path.join(db_constants::ROARINGISH_PACKED_FILE)).unwrap();
+        let mmap = unsafe { Mmap::map(&mmap_file).unwrap() };
+
+        (
+            Self {
+                env,
+                db_main,
+                db_doc_id_to_document,
+                db_token_to_offsets,
+            },
             common_tokens,
-        }
+            mmap,
+        )
     }
 
     #[inline(always)]
-    pub(crate) fn merge_tokens(&self, tokens: &[&str]) -> Vec<(String, u32)> {
+    pub(crate) fn merge_tokens(
+        &self,
+        tokens: &[&str],
+        common_tokens: &HashSet<String>,
+    ) -> Vec<(String, u32)> {
         let mut final_tokens = Vec::with_capacity(tokens.len());
         let mut sequence = Vec::with_capacity(tokens.len());
         for token in tokens.iter() {
-            if self.common_tokens.contains(*token) {
+            if common_tokens.contains(*token) {
                 sequence.push(*token);
                 continue;
             }
@@ -361,15 +434,41 @@ where
     #[inline(always)]
     pub(crate) fn get_roaringish_packed<'a>(
         &self,
-        rotxn: &'a RoTxn,
+        rotxn: &RoTxn,
         token: &str,
-    ) -> Option<&'a ArchivedRoaringishPacked> {
-        self.db_token_to_roaringish_packed
-            .get(rotxn, token)
-            .unwrap()
+        mmap: &'a Mmap,
+    ) -> Option<BorrowRoaringishPacked<'a>> {
+        let offset = self.db_token_to_offsets.get(rotxn, token).unwrap()?;
+
+        let begin = offset.begin.to_native() as usize;
+        let end = begin + offset.doc_id_group_len.to_native() as usize;
+        let (l, doc_id_groups, r) = unsafe { &mmap[begin..end].align_to::<u64>() };
+        assert!(l.is_empty());
+        assert!(r.is_empty());
+
+        let values_offset = unsafe { mmap.as_ptr().add(end).align_offset(16) };
+        if end + values_offset >= mmap.len() {
+            return None;
+        }
+        let begin = end + values_offset;
+        let end = begin + offset.values_len.to_native() as usize;
+        let (l, values, r) = unsafe { &mmap[begin..end].align_to::<u16>() };
+        assert!(l.is_empty());
+        assert!(r.is_empty());
+
+        Some(BorrowRoaringishPacked {
+            doc_id_groups,
+            values,
+        })
     }
 
-    pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
+    pub fn search<I: Intersect>(
+        &self,
+        q: &str,
+        stats: &Stats,
+        common_tokens: &HashSet<String>,
+        mmap: &Mmap,
+    ) -> Vec<u32> {
         let b = std::time::Instant::now();
         let q = normalize(q);
         let tokens: Vec<_> = tokenize(&q).collect();
@@ -384,19 +483,19 @@ where
         let rotxn = self.env.read_txn().unwrap();
         if tokens.len() == 1 {
             return self
-                .get_roaringish_packed(&rotxn, tokens.first().unwrap())
+                .get_roaringish_packed(&rotxn, tokens.first().unwrap(), mmap)
                 .map(|p| p.get_doc_ids())
                 .unwrap_or_default();
         }
 
         let b = std::time::Instant::now();
-        let final_tokens = self.merge_tokens(&tokens);
+        let final_tokens = self.merge_tokens(&tokens, common_tokens);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         if final_tokens.len() == 1 {
             return self
-                .get_roaringish_packed(&rotxn, &final_tokens.first().unwrap().0)
+                .get_roaringish_packed(&rotxn, &final_tokens.first().unwrap().0, mmap)
                 .map(|p| p.get_doc_ids())
                 .unwrap_or_default();
         }
@@ -405,7 +504,7 @@ where
         let mut token_to_packed = AHashMap::with_capacity(deduped_tokens.len());
         for token in deduped_tokens.iter() {
             let b = std::time::Instant::now();
-            let Some(packed) = self.get_roaringish_packed(&rotxn, token) else {
+            let Some(packed) = self.get_roaringish_packed(&rotxn, token, mmap) else {
                 return Vec::new();
             };
             token_to_packed.insert(*token, packed);
@@ -425,19 +524,25 @@ where
 
         let mut lhs = if *lhs_len > 1 {
             let b = std::time::Instant::now();
-            let lhs = *lhs + (*lhs_len - 1);
+            let lhs = lhs + (*lhs_len - 1);
             stats
                 .add_lhs
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-            lhs.intersect::<I, _>(*rhs, *rhs_len, stats)
+
+            let lhs = BorrowRoaringishPacked::from(&lhs);
+            lhs.intersect::<I>(rhs, *rhs_len, stats)
         } else {
-            lhs.intersect::<I, _>(*rhs, *rhs_len, stats)
+            lhs.intersect::<I>(rhs, *rhs_len, stats)
         };
+        let mut borrow_lhs = BorrowRoaringishPacked::from(&lhs);
 
         for (t, t_len) in it {
             let rhs = token_to_packed.get(t).unwrap();
-            lhs = lhs.intersect::<I, _>(*rhs, *t_len, stats);
+            lhs = borrow_lhs.intersect::<I>(rhs, *t_len, stats);
+            borrow_lhs = BorrowRoaringishPacked::from(&lhs);
         }
-        lhs.get_doc_ids()
+
+        borrow_lhs = BorrowRoaringishPacked::from(&lhs);
+        borrow_lhs.get_doc_ids()
     }
 }

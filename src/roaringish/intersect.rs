@@ -2,7 +2,7 @@
 
 use std::mem::MaybeUninit;
 
-use super::{BorrowRoaringishPacked, Packed};
+use super::BorrowRoaringishPacked;
 
 pub mod naive;
 pub mod simd;
@@ -12,9 +12,9 @@ mod private {
 }
 
 pub trait Intersect: private::IntersectSeal {
-    fn intersect<const FIRST: bool, L: Packed, R: Packed>(
-        lhs: &BorrowRoaringishPacked<L>,
-        rhs: &BorrowRoaringishPacked<R>,
+    fn intersect<const FIRST: bool>(
+        lhs: &BorrowRoaringishPacked,
+        rhs: &BorrowRoaringishPacked,
     ) -> (Vec<u64>, Vec<u16>, Vec<u64>) {
         let mut lhs_i = 0;
         let mut rhs_i = 0;
@@ -32,7 +32,7 @@ pub trait Intersect: private::IntersectSeal {
             Box::new_uninit_slice(0)
         };
 
-        Self::inner_intersect::<FIRST, L, R>(
+        Self::inner_intersect::<FIRST>(
             lhs,
             rhs,
             &mut lhs_i,
@@ -64,9 +64,9 @@ pub trait Intersect: private::IntersectSeal {
         }
     }
 
-    fn inner_intersect<const FIRST: bool, L: Packed, R: Packed>(
-        lhs: &BorrowRoaringishPacked<L>,
-        rhs: &BorrowRoaringishPacked<R>,
+    fn inner_intersect<const FIRST: bool>(
+        lhs: &BorrowRoaringishPacked,
+        rhs: &BorrowRoaringishPacked,
 
         lhs_i: &mut usize,
         rhs_i: &mut usize,
@@ -79,8 +79,8 @@ pub trait Intersect: private::IntersectSeal {
         j: &mut usize,
     );
 
-    fn intersection_buffer_size<L: Packed, R: Packed>(
-        lhs: &BorrowRoaringishPacked<L>,
-        rhs: &BorrowRoaringishPacked<R>,
+    fn intersection_buffer_size(
+        lhs: &BorrowRoaringishPacked,
+        rhs: &BorrowRoaringishPacked,
     ) -> usize;
 }
