@@ -1,6 +1,8 @@
 use std::{alloc::{alloc, dealloc, Allocator}, ptr::NonNull};
 
-#[derive(Default)]
+use rkyv::{Archive, Serialize};
+
+#[derive(Default, Archive, Serialize)]
 pub struct AlignedAllocator<const N: usize>;
 unsafe impl<const N: usize> Allocator for AlignedAllocator<N> {
     fn allocate(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {

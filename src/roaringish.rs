@@ -2,8 +2,6 @@ pub mod intersect;
 
 use arbitrary::{Arbitrary, Unstructured};
 use rkyv::{Archive, Serialize};
-use std::borrow::Borrow;
-use std::marker::PhantomData;
 use std::{
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
@@ -47,19 +45,10 @@ const fn get_group_from_doc_id_group(packed: u64) -> u32 {
     (packed & 0x00000000FFFF) as u32
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Archive)]
 pub struct RoaringishPacked {
-    pub(crate) doc_id_groups: Vec<u64, Aligned64>,
-    pub(crate) values: Vec<u16, Aligned64>,
-}
-
-impl Default for RoaringishPacked {
-    fn default() -> Self {
-        Self {
-            doc_id_groups: Vec::new_in(Aligned64::default()),
-            values: Vec::new_in(Aligned64::default()),
-        }
-    }
+    pub(crate) doc_id_groups: Vec<u64>,
+    pub(crate) values: Vec<u16>,
 }
 
 impl RoaringishPacked {
@@ -112,6 +101,66 @@ impl RoaringishPacked {
     }
 }
 
+impl ArchivedRoaringishPacked {
+    pub fn concat(&self, other: &RoaringishPacked) -> RoaringishPacked {
+        unsafe fn copy_data<T, U>(dest: &mut [MaybeUninit<T>], lhs: &[U], rhs: &[T]) {
+            let (l, buf, r) = dest.align_to_mut::<MaybeUninit<u8>>();
+            debug_assert!(l.is_empty());
+            debug_assert!(r.is_empty());
+
+            let (l, lhs, r) = lhs.align_to::<MaybeUninit<u8>>();
+            debug_assert!(l.is_empty());
+            debug_assert!(r.is_empty());
+
+            let (l, rhs, r) = rhs.align_to::<MaybeUninit<u8>>();
+            debug_assert!(l.is_empty());
+            debug_assert!(r.is_empty());
+
+            buf[0..lhs.len()].copy_from_slice(lhs);
+            buf[lhs.len()..].copy_from_slice(rhs);
+        }
+
+        let n = self.doc_id_groups.len() + other.doc_id_groups.len();
+        let mut doc_id_groups = Box::new_uninit_slice(n);
+        let mut values = Box::new_uninit_slice(n);
+
+        unsafe {
+            copy_data(&mut doc_id_groups, &self.doc_id_groups, &other.doc_id_groups);
+            copy_data(&mut values, &self.values, &other.values);
+        }
+
+        unsafe {
+            RoaringishPacked {
+                doc_id_groups: Vec::from_raw_parts(
+                    Box::into_raw(doc_id_groups) as *mut _,
+                    n,
+                    n
+                ),
+                values: Vec::from_raw_parts(
+                    Box::into_raw(values) as *mut _,
+                    n,
+                    n
+                ),
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct AlignedRoaringishPacked {
+    pub(crate) doc_id_groups: Vec<u64, Aligned64>,
+    pub(crate) values: Vec<u16, Aligned64>,
+}
+
+impl Default for AlignedRoaringishPacked {
+    fn default() -> Self {
+        Self {
+            doc_id_groups: Vec::new_in(Aligned64::default()),
+            values: Vec::new_in(Aligned64::default()),
+        }
+    }
+}
+
 pub struct BorrowRoaringishPacked<'a> {
     pub(crate) doc_id_groups: &'a [u64],
     pub(crate) values: &'a [u16],
@@ -122,7 +171,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
         Self { doc_id_groups, values }
     }
 
-    pub fn new(packed: &'a RoaringishPacked) -> Self {
+    pub fn new(packed: &'a AlignedRoaringishPacked) -> Self {
         BorrowRoaringishPacked {
             doc_id_groups: &packed.doc_id_groups,
             values: &packed.values,
@@ -178,7 +227,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
         rhs: &Self,
         rhs_len: u32,
         stats: &Stats,
-    ) -> RoaringishPacked {
+    ) -> AlignedRoaringishPacked {
         let lhs = self;
 
         let b = std::time::Instant::now();
@@ -290,7 +339,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
 
             let (p_values, a1) = Box::into_raw_with_allocator(r_values);
             let values = Vec::from_raw_parts_in(p_values as *mut _, r_i, capacity, a1);
-            RoaringishPacked {
+            AlignedRoaringishPacked {
                 doc_id_groups,
                 values,
             }
@@ -310,7 +359,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
 }
 
 impl<'a> Add<u32> for &BorrowRoaringishPacked<'a> {
-    type Output = RoaringishPacked;
+    type Output = AlignedRoaringishPacked;
 
     fn add(self, rhs: u32) -> Self::Output {
         unsafe {
@@ -345,7 +394,7 @@ impl<'a> Add<u32> for &BorrowRoaringishPacked<'a> {
         }
 
         unsafe {
-            RoaringishPacked {
+            AlignedRoaringishPacked {
                 doc_id_groups: Vec::from_raw_parts_in(
                     Box::into_raw(doc_id_groups) as *mut _,
                     i,
@@ -421,7 +470,7 @@ impl Display for RoaringishPacked {
     }
 }
 
-impl<'a> Arbitrary<'a> for RoaringishPacked {
+impl<'a> Arbitrary<'a> for AlignedRoaringishPacked {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         let len = u.arbitrary_len::<(u64, u16)>()?;
 

@@ -30,6 +30,7 @@ use crate::{
 mod db_constants {
     pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
     pub const DB_TOKEN_TO_OFFSETS: &'static str = "token_to_offsets";
+    pub const DB_TOKEN_TO_PACKED: &'static str = "token_to_packed";
     pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
     pub const ROARINGISH_PACKED_FILE: &'static str = "roaringish_packed";
 }
@@ -164,6 +165,7 @@ where
     db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
     db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
+    db_token_to_packed: Database<Str, ZeroCopyCodec<RoaringishPacked>>,
 }
 
 unsafe impl<D> Send for DB<D> where
@@ -192,7 +194,7 @@ where
 
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(2)
+                .max_dbs(3)
                 .map_size(db_size)
                 .flags(EnvFlags::WRITE_MAP | EnvFlags::MAP_ASYNC)
                 .open(path)
@@ -215,6 +217,10 @@ where
             .create_database(&mut wrtxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))
             .unwrap();
 
+        let db_token_to_packed = env
+            .create_database(&mut wrtxn, Some(db_constants::DB_TOKEN_TO_PACKED))
+            .unwrap();
+
         wrtxn.commit().unwrap();
 
         Self {
@@ -222,6 +228,7 @@ where
             db_main,
             db_doc_id_to_document,
             db_token_to_offsets,
+            db_token_to_packed,
         }
     }
 
@@ -241,28 +248,37 @@ where
     pub(crate) fn write_token_to_roaringish_packed(
         &self,
         rwtxn: &mut RwTxn,
-        token_to_token_id: &AHashMap<Box<str>, u32>,
-        token_id_to_roaringish_packed: &[RoaringishPacked],
+        token_to_token_packed: &AHashMap<Box<str>, RoaringishPacked>,
+        mmap_size: &mut usize,
     ) {
-        let mut token_to_token_id: Vec<_> = token_to_token_id.iter().collect();
-        token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
+        let mut token_to_token_packed: Vec<_> = token_to_token_packed.into_iter().collect();
+        token_to_token_packed.sort_by(|(t0, _), (t1, _)| t0.cmp(t1));
+        for (token, packed) in token_to_token_packed.into_iter() {
+            if token.len() > 511 {
+                continue;
+            }
 
-        let size: usize = token_id_to_roaringish_packed
-            .iter()
-            .map(|p| p.size_bytes() + 64 + 16)
-            .sum();
+            let Ok(achived_packed) = self.db_token_to_packed.get(rwtxn, token) else {
+                continue;
+            };
 
-        let file = File::options()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(self.env.path().join(db_constants::ROARINGISH_PACKED_FILE))
-            .unwrap();
-        file.set_len(size as u64).unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut i = 0;
+            *mmap_size += packed.size_bytes();
 
+            match achived_packed {
+                Some(achived_packed) => {
+                    let packed = achived_packed.concat(packed);
+                    self.db_token_to_packed.put(rwtxn, token, &packed).unwrap()
+                }
+                None => {
+                    // padding
+                    *mmap_size += 64 + 16;
+                    self.db_token_to_packed.put(rwtxn, token, packed).unwrap()
+                }
+            }
+        }
+    }
+
+    pub(crate) fn generate_mmap_file(&self, mmap_size: usize, rwtxn: &mut RwTxn) {
         #[inline(always)]
         fn to_bytes<T>(v: &[T]) -> &[u8] {
             unsafe {
@@ -275,41 +291,62 @@ where
         #[inline(always)]
         unsafe fn write_to_mmap<T, const N: usize>(
             mmap: &mut MmapMut,
-            i: &mut usize,
+            mmap_offset: &mut usize,
             v: &[T],
         ) -> (usize, usize) {
-            let ptr = mmap.as_ptr().add(*i);
+            let ptr = mmap.as_ptr().add(*mmap_offset);
             let offset = ptr.align_offset(N);
-            if *i + offset >= mmap.len() {
+            if *mmap_offset + offset >= mmap.len() {
                 panic!("We fucked up, writing out of bounds");
             }
-            *i += offset;
+            *mmap_offset += offset;
             let bytes = to_bytes(&v);
-            mmap[*i..*i + bytes.len()].copy_from_slice(bytes);
+            mmap[*mmap_offset..*mmap_offset + bytes.len()].copy_from_slice(bytes);
 
-            let begin = *i;
-            *i += bytes.len();
+            let begin = *mmap_offset;
+            *mmap_offset += bytes.len();
             (begin, bytes.len())
         }
 
-        for (token, token_id) in token_to_token_id.iter() {
-            let roaringish_packed = &token_id_to_roaringish_packed[**token_id as usize];
+        let file = File::options()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(self.env.path().join(db_constants::ROARINGISH_PACKED_FILE))
+            .unwrap();
+        file.set_len(mmap_size as u64).unwrap();
+        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+        let mut mmap_offset = 0;
+
+        let mut token_to_offset = Vec::new();
+        for r in self.db_token_to_packed.iter(rwtxn).unwrap() {
+            let (token, roaringish_packed) = r.unwrap();
             let offset = unsafe {
-                let (begin, doc_id_group_len) =
-                    write_to_mmap::<_, 64>(&mut mmap, &mut i, &roaringish_packed.doc_id_groups);
+                let (begin, doc_id_group_len) = write_to_mmap::<_, 64>(
+                    &mut mmap,
+                    &mut mmap_offset,
+                    &roaringish_packed.doc_id_groups,
+                );
                 let (_, values_len) =
-                    write_to_mmap::<_, 16>(&mut mmap, &mut i, &roaringish_packed.values);
+                    write_to_mmap::<_, 16>(&mut mmap, &mut mmap_offset, &roaringish_packed.values);
                 Offset {
                     begin: begin as u64,
                     doc_id_group_len: doc_id_group_len as u64,
                     values_len: values_len as u64,
                 }
             };
+            token_to_offset.push((token.to_owned(), offset));
+        }
+        token_to_offset.sort_by(|(t0, _), (t1, _)| t0.cmp(t1));
 
+        for (token, offset) in token_to_offset.iter() {
             self.db_token_to_offsets
                 .put_with_flags(rwtxn, PutFlags::APPEND, token, &offset)
                 .unwrap();
         }
+
+        self.db_token_to_packed.clear(rwtxn).unwrap();
     }
 
     fn read_common_tokens(
@@ -325,27 +362,17 @@ where
         deserialize::<_, rkyv::rancor::Error>(k).unwrap()
     }
 
-    pub(crate) fn write_common_tokens(
-        &self,
-        rwtxn: &mut RwTxn,
-        common_token_ids: &FxHashSet<u32>,
-        token_id_to_token: &[Box<str>],
-    ) {
-        let common_tokens: HashSet<_> = common_token_ids
-            .iter()
-            .map(|token_id| token_id_to_token[*token_id as usize].to_string())
-            .collect();
-
+    pub(crate) fn write_common_tokens(&self, rwtxn: &mut RwTxn, common_tokens: &HashSet<Box<str>>) {
         self.db_main
-            .remap_types::<Str, ZeroCopyCodec<HashSet<String>>>()
-            .put(rwtxn, db_constants::KEY_COMMON_TOKENS, &common_tokens)
+            .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
+            .put(rwtxn, db_constants::KEY_COMMON_TOKENS, common_tokens)
             .unwrap();
     }
 
     pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<String>, Mmap) {
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(2)
+                .max_dbs(3)
                 .map_size(db_size)
                 .flags(EnvFlags::READ_ONLY)
                 .open(path)
@@ -370,6 +397,11 @@ where
             .unwrap()
             .unwrap();
 
+        let db_token_to_packed = env
+            .open_database(&rotxn, Some(db_constants::DB_TOKEN_TO_PACKED))
+            .unwrap()
+            .unwrap();
+
         let common_tokens = Self::read_common_tokens(&rotxn, db_main);
 
         rotxn.commit().unwrap();
@@ -383,6 +415,7 @@ where
                 db_main,
                 db_doc_id_to_document,
                 db_token_to_offsets,
+                db_token_to_packed,
             },
             common_tokens,
             mmap,

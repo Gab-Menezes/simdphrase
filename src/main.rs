@@ -1,4 +1,3 @@
-#![feature(new_uninit)]
 #![feature(portable_simd)]
 #![feature(maybe_uninit_slice)]
 #![feature(avx512_target_feature)]
@@ -15,7 +14,12 @@ use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 use std::{
-    alloc::{alloc, dealloc, Allocator}, fmt::Debug, fs::File, io::{BufRead, BufReader}, path::PathBuf, ptr::NonNull
+    alloc::{alloc, dealloc, Allocator},
+    fmt::Debug,
+    fs::File,
+    io::{BufRead, BufReader},
+    path::PathBuf,
+    ptr::NonNull,
 };
 
 #[derive(Parser, Debug)]
@@ -26,7 +30,7 @@ struct CommandArgs {
 
 #[derive(Subcommand, Debug)]
 enum Ty {
-    IndexText(IndexFolder),
+    // IndexText(IndexFolder),
     // IndexParquet(IndexFolder),
     IndexMsMarco(IndexFile),
     Search(Search),
@@ -116,38 +120,38 @@ where
     }
 }
 
-fn index_text(args: IndexFolder) {
-    println!("Start Indexing");
+// fn index_text(args: IndexFolder) {
+//     println!("Start Indexing");
 
-    let files: Vec<_> = std::fs::read_dir(&args.folder)
-        .unwrap()
-        .map(|file| file.unwrap().path())
-        .collect();
+//     let files: Vec<_> = std::fs::read_dir(&args.folder)
+//         .unwrap()
+//         .map(|file| file.unwrap().path())
+//         .collect();
 
-    println!();
-    println!("Files to Index: {files:#?}");
-    println!();
+//     println!();
+//     println!("Files to Index: {files:#?}");
+//     println!();
 
-    let docs: Vec<_> = files
-        .into_iter()
-        .map(|file| {
-            let content = std::fs::read_to_string(&file).unwrap();
-            (content, file.to_str().unwrap().to_owned())
-        })
-        .collect();
+//     let docs: Vec<_> = files
+//         .into_iter()
+//         .map(|file| {
+//             let content = std::fs::read_to_string(&file).unwrap();
+//             (content, file.to_str().unwrap().to_owned())
+//         })
+//         .collect();
 
-    let b = std::time::Instant::now();
+//     let b = std::time::Instant::now();
 
-    // let mut indexer = Indexer::new(&args.index_name, args.db_size, None, None, None);
-    let mut indexer = Indexer::new(&args.index_name, args.db_size, None, None, None);
-    let num_docs = indexer.index(docs);
-    indexer.flush();
+//     // let mut indexer = Indexer::new(&args.index_name, args.db_size, None, None, None);
+//     let mut indexer = Indexer::new(&args.index_name, args.db_size, None, None, None);
+//     let num_docs = indexer.index(docs);
+//     indexer.flush();
 
-    println!(
-        "Whole Indexing took {:?} ({num_docs} documents)",
-        b.elapsed()
-    );
-}
+//     println!(
+//         "Whole Indexing took {:?} ({num_docs} documents)",
+//         b.elapsed()
+//     );
+// }
 
 // fn index_parquet(args: IndexFolder) {
 //     println!("Start Indexing");
@@ -204,15 +208,18 @@ fn index_msmarco(args: IndexFile) {
 
     let b = std::time::Instant::now();
 
-    let mut indexer = Indexer::new(
-        &args.index_name,
-        args.db_size,
-        Some(500000),
-        Some(CommonTokens::FixedNum(50)),
-        Some(1460),
-    );
-    let num_docs = indexer.index(it);
-    indexer.flush();
+    // let mut indexer = Indexer::new(
+    //     &args.index_name,
+    //     args.db_size,
+    //     Some(500000),
+    //     Some(CommonTokens::FixedNum(50)),
+    //     Some(1460),
+    // );
+    // let num_docs = indexer.index(it);
+    // indexer.flush();
+
+    let indexer = Indexer::new(Some(400000), Some(CommonTokens::FixedNum(50)), Some(1460));
+    let num_docs = indexer.index(it, &args.index_name, args.db_size);
 
     println!(
         "Whole Indexing took {:?} ({num_docs} documents)",
@@ -227,7 +234,7 @@ fn main() {
     rayon::ThreadPoolBuilder::new().build_global().unwrap();
 
     match args.ty {
-        Ty::IndexText(arg) => index_text(arg),
+        // Ty::IndexText(arg) => index_text(arg),
         // Ty::IndexParquet(arg) => index_parquet(arg),
         Ty::IndexMsMarco(arg) => index_msmarco(arg),
         Ty::Search(arg) => match arg.data_set {

@@ -12,6 +12,7 @@
 #![feature(avx512_target_feature)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(allocator_api)]
+#![feature(str_as_str)]
 
 mod codecs;
 mod db;

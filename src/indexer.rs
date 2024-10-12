@@ -1,7 +1,8 @@
-use std::{cell::Cell, cmp::Reverse, path::Path};
+use std::{cell::Cell, cmp::Reverse, collections::HashSet, path::Path};
 
-use ahash::{AHashMap, HashMapExt, HashSetExt};
+use ahash::{AHashMap, AHashSet, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
+use heed::RwTxn;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
@@ -12,131 +13,81 @@ use crate::{
     utils::{normalize, tokenize, MAX_SEQ_LEN},
 };
 
-const TOKEN_ID_TOO_LONG: u32 = u32::MAX;
-
 #[derive(Debug)]
 pub enum CommonTokens {
-    List(Vec<String>),
+    // List(AHashSet<Box<str>>),
     FixedNum(u32),
     Percentage(f64),
 }
 
 #[derive(Debug)]
-struct InnerIndexer<D>
+struct Batch<D>
 where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive,
 {
-    next_token_id: u32,
-    token_to_token_id: AHashMap<Box<str>, u32>,
-
-    // this 3 containers are in sync
-    token_id_to_freq: Vec<(u32, u32)>,
-    token_id_to_roaringish_packed: Vec<RoaringishPacked>,
-    token_id_to_token: Vec<Box<str>>,
+    token_to_packed: AHashMap<Box<str>, RoaringishPacked>,
 
     // this 3 containers are in sync
     doc_ids: Vec<u32>,
     documents: Vec<D>,
-    token_id_reprs: Vec<Vec<u32>>,
+    tokenized_docs: Vec<Vec<Box<str>>>,
 }
 
-impl<D> InnerIndexer<D>
+impl<D> Batch<D>
 where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
         + 'static,
 {
-    fn new(documents_per_shard: Option<u32>, avg_document_tokens: Option<u32>) -> Self {
-        match documents_per_shard {
-            Some(documents_per_shard) => match avg_document_tokens {
+    fn new(batch_size: Option<u32>, avg_document_tokens: Option<u32>) -> Self {
+        match batch_size {
+            Some(batch_size) => match avg_document_tokens {
                 Some(avg_document_tokens) => {
                     // Heap's Law
-                    let len = (1.705
-                        * (documents_per_shard as f64 * avg_document_tokens as f64).powf(0.786))
-                    .ceil() as usize;
+                    let len = (1.705 * (batch_size as f64 * avg_document_tokens as f64).powf(0.786))
+                        .ceil() as usize;
                     Self {
-                        next_token_id: 0,
-                        token_to_token_id: AHashMap::with_capacity(len),
-                        token_id_to_freq: Vec::with_capacity(len),
-                        token_id_to_roaringish_packed: Vec::with_capacity(len),
-                        token_id_to_token: Vec::with_capacity(len),
-                        token_id_reprs: Vec::with_capacity(len),
-                        doc_ids: Vec::with_capacity(documents_per_shard as usize),
-                        documents: Vec::with_capacity(documents_per_shard as usize),
+                        token_to_packed: AHashMap::with_capacity(len),
+                        tokenized_docs: Vec::with_capacity(len),
+                        doc_ids: Vec::with_capacity(batch_size as usize),
+                        documents: Vec::with_capacity(batch_size as usize),
                     }
                 }
                 None => Self {
-                    next_token_id: 0,
-                    token_to_token_id: AHashMap::new(),
-                    token_id_to_freq: Vec::new(),
-                    token_id_to_roaringish_packed: Vec::new(),
-                    token_id_to_token: Vec::new(),
-                    token_id_reprs: Vec::new(),
-                    doc_ids: Vec::with_capacity(documents_per_shard as usize),
-                    documents: Vec::with_capacity(documents_per_shard as usize),
+                    token_to_packed: AHashMap::new(),
+                    tokenized_docs: Vec::new(),
+                    doc_ids: Vec::with_capacity(batch_size as usize),
+                    documents: Vec::with_capacity(batch_size as usize),
                 },
             },
             None => Self {
-                next_token_id: 0,
-                token_to_token_id: AHashMap::new(),
-                token_id_to_freq: Vec::new(),
-                token_id_to_roaringish_packed: Vec::new(),
-                token_id_to_token: Vec::new(),
-                token_id_reprs: Vec::new(),
+                token_to_packed: AHashMap::new(),
+                tokenized_docs: Vec::new(),
                 doc_ids: Vec::new(),
                 documents: Vec::new(),
             },
         }
     }
 
-    fn push(&mut self, doc_id: u32, content: &str, doc: D) {
-        self.doc_ids.push(doc_id);
-        self.documents.push(doc);
-
-        let token_id_repr = self.index_doc(content, doc_id);
-        self.token_id_reprs.push(token_id_repr);
+    fn clear(&mut self) {
+        self.token_to_packed.clear();
+        self.doc_ids.clear();
+        self.documents.clear();
+        self.tokenized_docs.clear();
     }
 
-    fn get_token_id(
-        token: &str,
-        token_to_token_id: &mut AHashMap<Box<str>, u32>,
-        token_id_to_token: &mut Vec<Box<str>>,
-        token_id_to_freq: &mut Vec<(u32, u32)>,
-        token_id_to_roaringish_packed: &mut Vec<RoaringishPacked>,
-        next_token_id: &mut u32,
-    ) -> u32 {
-        if token.as_bytes().len() > 511 {
-            return TOKEN_ID_TOO_LONG;
-        }
-        let (_, token_id) = token_to_token_id
-            .raw_entry_mut()
-            .from_key(token)
-            .or_insert_with(|| {
-                let current_token_id = *next_token_id;
-                *next_token_id += 1;
-                (token.to_string().into_boxed_str(), current_token_id)
-            });
-        if *token_id as usize >= token_id_to_freq.len() {
-            token_id_to_freq.push((*token_id, 1));
-            token_id_to_token.push(token.to_string().into_boxed_str());
-            token_id_to_roaringish_packed.push(RoaringishPacked::default());
-        } else {
-            token_id_to_freq[*token_id as usize].1 += 1;
-        }
-        *token_id
+    fn push(&mut self, doc_id: u32, content: &str, doc: D, count_freq: impl FnMut(&Box<str>)) {
+        let tokenized_doc = self.index_doc(content, doc_id, count_freq);
+        self.doc_ids.push(doc_id);
+        self.documents.push(doc);
+        self.tokenized_docs.push(tokenized_doc);
     }
 
     fn analyze_common_tokens_sequence(
-        sequence: &[u32],
+        sequence: &[&str],
         begin_pos: usize,
-        token_id_to_positions: &mut FxHashMap<u32, Vec<u32>>,
-
-        token_to_token_id: &mut AHashMap<Box<str>, u32>,
-        token_id_to_token: &mut Vec<Box<str>>,
-        token_id_to_freq: &mut Vec<(u32, u32)>,
-        token_id_to_roaringish_packed: &mut Vec<RoaringishPacked>,
-        next_token_id: &mut u32,
+        token_to_positions: &mut AHashMap<Box<str>, Vec<u32>>,
     ) {
         if sequence.len() <= 1 {
             return;
@@ -146,139 +97,77 @@ where
             let e = (sequence.len() + 1).min(i + MAX_SEQ_LEN + 1);
             for j in b..e {
                 let token: String = sequence[i..j]
-                    .iter()
-                    .map(|token_id| token_id_to_token[*token_id as usize].as_ref())
+                    .into_iter()
+                    .map(|s| *s)
                     .intersperse(" ")
                     .collect();
-                let token = token.as_str();
-                let token_id = Self::get_token_id(
-                    token,
-                    token_to_token_id,
-                    token_id_to_token,
-                    token_id_to_freq,
-                    token_id_to_roaringish_packed,
-                    next_token_id,
-                );
-                token_id_to_positions
-                    .entry(token_id)
-                    .or_default()
-                    .push((begin_pos + i) as u32);
+                let (_, pos) = token_to_positions
+                    .raw_entry_mut()
+                    .from_key(token.as_str())
+                    .or_insert_with(|| (token.into_boxed_str(), Vec::new()));
+                pos.push((begin_pos + i) as u32);
             }
         }
     }
 
-    fn index_doc(&mut self, content: &str, doc_id: u32) -> Vec<u32> {
-        let mut token_id_repr = Vec::new();
-        let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
+    fn index_doc(
+        &mut self,
+        content: &str,
+        doc_id: u32,
+        mut count_freq: impl FnMut(&Box<str>),
+    ) -> Vec<Box<str>> {
+        let mut tokenized_doc = Vec::new();
+        let mut token_to_positions: AHashMap<&str, Vec<u32>> = AHashMap::new();
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
-            let token_id = Self::get_token_id(
-                token,
-                &mut self.token_to_token_id,
-                &mut self.token_id_to_token,
-                &mut self.token_id_to_freq,
-                &mut self.token_id_to_roaringish_packed,
-                &mut self.next_token_id,
-            );
+            let owned_token = token.to_owned().into_boxed_str();
+            count_freq(&owned_token);
 
-            token_id_to_positions
-                .entry(token_id)
+            token_to_positions
+                .entry(token)
                 .or_default()
                 .push(pos as u32);
-            token_id_repr.push(token_id);
+            tokenized_doc.push(owned_token);
         }
 
-        for (token_id, positions) in token_id_to_positions.iter() {
-            if *token_id == TOKEN_ID_TOO_LONG {
-                continue;
-            }
-
-            self.token_id_to_roaringish_packed[*token_id as usize].push(doc_id, positions);
+        for (token, positions) in token_to_positions.iter() {
+            let (_, packed) = self
+                .token_to_packed
+                .raw_entry_mut()
+                .from_key(*token)
+                .or_insert_with(|| {
+                    (
+                        token.to_string().into_boxed_str(),
+                        RoaringishPacked::default(),
+                    )
+                });
+            packed.push(doc_id, positions);
         }
-        token_id_repr
+        tokenized_doc
     }
 
-    fn flush(
-        mut self,
-        path: &Path,
-        db_size: usize,
-        shard_id: &mut u32,
-        common_tokens: &Option<CommonTokens>,
-    ) {
+    fn flush(&mut self, db: &DB<D>, rwtxn: &mut RwTxn, common_tokens: &HashSet<Box<str>>, mmap_size: &mut usize) {
         if self.doc_ids.is_empty() {
             return;
         }
-        let b = std::time::Instant::now();
-        let path = path.join(shard_id.to_string());
 
-        let db = DB::truncate(&path, db_size);
+        self.generate_common_tokens(common_tokens);
 
-        let common_token_ids = match common_tokens {
-            Some(common_tokens) => self.generate_common_tokens(common_tokens),
-            None => FxHashSet::new(),
-        };
+        db.write_token_to_roaringish_packed(rwtxn, &self.token_to_packed, mmap_size);
+        db.write_doc_id_to_document(rwtxn, &self.doc_ids, &self.documents);
 
-        let mut rwtxn = db.env.write_txn().unwrap();
-
-        db.write_token_to_roaringish_packed(
-            &mut rwtxn,
-            &self.token_to_token_id,
-            &self.token_id_to_roaringish_packed,
-        );
-
-        db.write_doc_id_to_document(&mut rwtxn, &self.doc_ids, &self.documents);
-
-        db.write_common_tokens(&mut rwtxn, &common_token_ids, &self.token_id_to_token);
-
-        rwtxn.commit().unwrap();
-
-        println!("Flushed shard: {shard_id} in {:?}", b.elapsed());
-
-        *shard_id += 1;
+        self.clear();
     }
 
-    fn generate_common_tokens(&mut self, common_tokens: &CommonTokens) -> FxHashSet<u32> {
-        println!("before: {}", self.token_id_to_roaringish_packed.len());
-        let common_token_ids: FxHashSet<_> = match common_tokens {
-            CommonTokens::List(tokens) => tokens
-                .iter()
-                .filter_map(|t| self.token_to_token_id.get(t.as_str()).copied())
-                .collect(),
-            CommonTokens::FixedNum(max) => {
-                let max = (*max as usize).min(self.token_id_to_freq.len());
-                self.token_id_to_freq
-                    .sort_unstable_by_key(|(_, freq)| Reverse(*freq));
-                self.token_id_to_freq[0..max]
-                    .iter()
-                    .map(|(token_id, _)| *token_id)
-                    .collect()
-            }
-            CommonTokens::Percentage(p) => {
-                let max = (self.token_id_to_freq.len() as f64 * *p) as usize;
-                self.token_id_to_freq
-                    .sort_unstable_by_key(|(_, freq)| Reverse(*freq));
-                self.token_id_to_freq[0..max]
-                    .iter()
-                    .map(|(token_id, _)| *token_id)
-                    .collect()
-            }
-        };
-
-        // for id in common_token_ids.iter(){
-        //     println!("{id} -> {}", self.token_id_to_token[*id as usize]);
-        // }
-        // for t in self.token_id_to_token.iter().enumerate() {
-        //     println!("{t:?}");
-        // }
-
+    fn generate_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
         let mut sequence = Vec::new();
-        for (token_id_repr, doc_id) in self.token_id_reprs.iter().zip(self.doc_ids.iter()) {
-            let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
+        for (token_id_repr, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
+            let mut token_to_positions: AHashMap<Box<str>, Vec<u32>> = AHashMap::new();
             sequence.clear();
             let mut begin_pos = 0;
-            for (pos, token_id) in token_id_repr.iter().enumerate() {
-                if common_token_ids.contains(token_id) {
-                    sequence.push(*token_id);
+            for (pos, token) in token_id_repr.iter().enumerate() {
+                if common_tokens.contains(token.as_str()) {
+                    sequence.push(token.as_str());
                     continue;
                 }
 
@@ -288,122 +177,148 @@ where
                     continue;
                 }
 
-                Self::analyze_common_tokens_sequence(
-                    &sequence,
-                    begin_pos,
-                    &mut token_id_to_positions,
-                    &mut self.token_to_token_id,
-                    &mut self.token_id_to_token,
-                    &mut self.token_id_to_freq,
-                    &mut self.token_id_to_roaringish_packed,
-                    &mut self.next_token_id,
-                );
+                Self::analyze_common_tokens_sequence(&sequence, begin_pos, &mut token_to_positions);
 
                 sequence.clear();
                 begin_pos = pos + 1;
             }
 
-            Self::analyze_common_tokens_sequence(
-                &sequence,
-                begin_pos,
-                &mut token_id_to_positions,
-                &mut self.token_to_token_id,
-                &mut self.token_id_to_token,
-                &mut self.token_id_to_freq,
-                &mut self.token_id_to_roaringish_packed,
-                &mut self.next_token_id,
-            );
+            Self::analyze_common_tokens_sequence(&sequence, begin_pos, &mut token_to_positions);
 
-            for (token_id, positions) in token_id_to_positions.iter() {
-                if *token_id == TOKEN_ID_TOO_LONG {
-                    continue;
-                }
-
-                self.token_id_to_roaringish_packed[*token_id as usize].push(*doc_id, positions);
+            for (token, positions) in token_to_positions.iter() {
+                let (_, packed) = self
+                    .token_to_packed
+                    .raw_entry_mut()
+                    .from_key(token)
+                    .or_insert_with(|| {
+                        (
+                            token.to_string().into_boxed_str(),
+                            RoaringishPacked::default(),
+                        )
+                    });
+                packed.push(*doc_id, positions);
             }
         }
-
-        println!("after: {}", self.token_id_to_roaringish_packed.len());
-        common_token_ids
     }
 }
 
-pub struct Indexer<'a, D>
-where
-    D: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
-        + Archive,
-{
-    path: &'a Path,
-    shard_db_size: usize,
-    next_doc_id: u32,
-    next_shard_id: u32,
-    docs_per_shard: Option<u32>,
-    indexer: Cell<InnerIndexer<D>>,
+pub struct Indexer {
+    batch_size: Option<u32>,
     common_tokens: Option<CommonTokens>,
     avg_document_tokens: Option<u32>,
 }
 
-impl<'a, D> Indexer<'a, D>
-where
-    D: for<'b> Serialize<HighSerializer<AlignedVec, ArenaHandle<'b>, rkyv::rancor::Error>>
-        + Archive
-        + 'static,
-{
+impl Indexer {
     pub fn new(
-        path: &'a Path,
-        shard_db_size: usize,
-        docs_per_shard: Option<u32>,
+        batch_size: Option<u32>,
         common_tokens: Option<CommonTokens>,
         avg_document_tokens: Option<u32>,
     ) -> Self {
         Self {
-            path,
-            shard_db_size,
-            next_doc_id: 0,
-            next_shard_id: 0,
-            docs_per_shard,
-            indexer: Cell::new(InnerIndexer::new(docs_per_shard, avg_document_tokens)),
+            batch_size,
             common_tokens,
             avg_document_tokens,
         }
     }
 
-    pub fn index<S: AsRef<str>, I: IntoIterator<Item = (S, D)>>(&mut self, docs: I) -> u32 {
-        let mut num_docs = 0;
-        for (content, doc) in docs {
-            num_docs += 1;
-            let doc_id = self.next_doc_id;
-            self.next_doc_id += 1;
+    fn generate_common_tokens<'a>(
+        &self,
+        token_to_freq: &'a AHashMap<Box<str>, u32>,
+    ) -> HashSet<Box<str>> {
+        let Some(common_tokens) = &self.common_tokens else {
+            return HashSet::new();
+        };
+        match common_tokens {
+            // CommonTokens::List(tokens) => tokens,
+            CommonTokens::FixedNum(max) => {
+                let max = (*max as usize).min(token_to_freq.len());
+                let mut token_to_freq: Vec<_> = token_to_freq.into_iter().collect();
+                token_to_freq.sort_unstable_by_key(|(_, freq)| Reverse(*freq));
+                token_to_freq[0..max]
+                    .iter()
+                    .map(|(token, _)| (*token).clone())
+                    .collect()
+            }
+            CommonTokens::Percentage(p) => {
+                let max = (token_to_freq.len() as f64 * *p) as usize;
+                let mut token_to_freq: Vec<_> = token_to_freq.into_iter().collect();
+                token_to_freq.sort_unstable_by_key(|(_, freq)| Reverse(*freq));
+                token_to_freq[0..max]
+                    .iter()
+                    .map(|(token, _)| (*token).clone())
+                    .collect()
+            }
+        }
+    }
 
-            self.indexer.get_mut().push(doc_id, content.as_ref(), doc);
+    pub fn index<S, D, I>(&self, docs: I, path: &Path, db_size: usize) -> u32
+    where
+        S: AsRef<str>,
+        I: IntoIterator<Item = (S, D)>,
+        D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+            + Archive
+            + 'static,
+    {
 
-            if let Some(docs_per_shard) = self.docs_per_shard {
-                if self.next_doc_id % docs_per_shard == 0 {
-                    let indexer = self.indexer.replace(InnerIndexer::new(
-                        self.docs_per_shard,
-                        self.avg_document_tokens,
-                    ));
-                    let b = std::time::Instant::now();
-                    indexer.flush(
-                        self.path,
-                        self.shard_db_size,
-                        &mut self.next_shard_id,
-                        &self.common_tokens,
-                    );
-                    println!("Outter: {:?}", b.elapsed());
-                }
+        let db = DB::truncate(&path, db_size);
+        let mut rwtxn = db.env.write_txn().unwrap();
+
+        let mut batch = Batch::new(self.batch_size, self.avg_document_tokens);
+
+        let batch_size = self.batch_size.unwrap_or(u32::MAX);
+        let mut it = docs.into_iter();
+
+        let mut token_to_freq = AHashMap::new();
+        let mut next_doc_id = 0;
+        let mut mmap_size = 0;
+        // compute the first batch to get common tokens
+        let mut b = std::time::Instant::now();
+        while let Some((content, doc)) = it.next() {
+            let doc_id = next_doc_id;
+            next_doc_id += 1;
+
+            batch.push(doc_id, content.as_ref(), doc, |owned_token| {
+                let (_, freq) = token_to_freq
+                    .raw_entry_mut()
+                    .from_key(owned_token.as_str())
+                    .or_insert_with(|| (owned_token.clone(), 0));
+                *freq += 1;
+            });
+
+            if next_doc_id % batch_size == 0 {
+                break;
             }
         }
 
-        num_docs
-    }
+        let common_tokens = self.generate_common_tokens(&token_to_freq);
 
-    pub fn flush(mut self) {
-        self.indexer.into_inner().flush(
-            self.path,
-            self.shard_db_size,
-            &mut self.next_shard_id,
-            &self.common_tokens,
-        );
+        batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size);
+        println!("flushed batch in {}", b.elapsed().as_secs());
+
+        b = std::time::Instant::now();
+        for (content, doc) in it {
+            let doc_id = next_doc_id;
+            next_doc_id += 1;
+
+            batch.push(doc_id, content.as_ref(), doc, |_| {});
+
+            if next_doc_id % batch_size == 0 {
+                batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size);
+                println!("flushed batch in {}", b.elapsed().as_secs());
+                b = std::time::Instant::now();
+            }
+        }
+
+        batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size);
+        println!("flushed batch in {}", b.elapsed().as_secs());
+
+        b = std::time::Instant::now();
+        db.write_common_tokens(&mut rwtxn, &common_tokens);
+        db.generate_mmap_file(mmap_size, &mut rwtxn);
+        println!("write mmap {}", b.elapsed().as_secs());
+        rwtxn.commit().unwrap();
+
+
+        next_doc_id
     }
 }
