@@ -26,12 +26,17 @@ where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive,
 {
-    token_to_packed: AHashMap<Box<str>, RoaringishPacked>,
+    next_token_id: u32,
+    token_to_token_id: AHashMap<Box<str>, u32>,
+
+    // this 2 containers are in sync
+    token_id_to_roaringish_packed: Vec<RoaringishPacked>,
+    token_id_to_token: Vec<Box<str>>,
 
     // this 3 containers are in sync
     doc_ids: Vec<u32>,
     documents: Vec<D>,
-    tokenized_docs: Vec<Vec<Box<str>>>,
+    tokenized_docs: Vec<Vec<u32>>,
 }
 
 impl<D> Batch<D>
@@ -48,21 +53,30 @@ where
                     let len = (1.705 * (batch_size as f64 * avg_document_tokens as f64).powf(0.786))
                         .ceil() as usize;
                     Self {
-                        token_to_packed: AHashMap::with_capacity(len),
+                        next_token_id: 0,
+                        token_to_token_id: AHashMap::with_capacity(len),
+                        token_id_to_roaringish_packed: Vec::with_capacity(len),
+                        token_id_to_token: Vec::with_capacity(len),
                         tokenized_docs: Vec::with_capacity(len),
                         doc_ids: Vec::with_capacity(batch_size as usize),
                         documents: Vec::with_capacity(batch_size as usize),
                     }
                 }
                 None => Self {
-                    token_to_packed: AHashMap::new(),
+                    next_token_id: 0,
+                    token_to_token_id: AHashMap::new(),
+                    token_id_to_roaringish_packed: Vec::new(),
+                    token_id_to_token: Vec::new(),
                     tokenized_docs: Vec::new(),
                     doc_ids: Vec::with_capacity(batch_size as usize),
                     documents: Vec::with_capacity(batch_size as usize),
                 },
             },
             None => Self {
-                token_to_packed: AHashMap::new(),
+                next_token_id: 0,
+                token_to_token_id: AHashMap::new(),
+                token_id_to_roaringish_packed: Vec::new(),
+                token_id_to_token: Vec::new(),
                 tokenized_docs: Vec::new(),
                 doc_ids: Vec::new(),
                 documents: Vec::new(),
@@ -71,13 +85,17 @@ where
     }
 
     fn clear(&mut self) {
-        self.token_to_packed.clear();
+        self.next_token_id = 0;
+        self.token_to_token_id.clear();
+        self.token_id_to_roaringish_packed.clear();
+        self.token_id_to_token.clear();
+
         self.doc_ids.clear();
         self.documents.clear();
         self.tokenized_docs.clear();
     }
 
-    fn push(&mut self, doc_id: u32, content: &str, doc: D, count_freq: impl FnMut(&Box<str>)) {
+    fn push(&mut self, doc_id: u32, content: &str, doc: D, count_freq: impl FnMut(&str)) {
         let tokenized_doc = self.index_doc(content, doc_id, count_freq);
         self.doc_ids.push(doc_id);
         self.documents.push(doc);
@@ -85,9 +103,13 @@ where
     }
 
     fn analyze_common_tokens_sequence(
-        sequence: &[&str],
+        sequence: &[u32],
         begin_pos: usize,
-        token_to_positions: &mut AHashMap<Box<str>, Vec<u32>>,
+        token_id_to_positions: &mut FxHashMap<u32, Vec<u32>>,
+        token_to_token_id: &mut AHashMap<Box<str>, u32>,
+        token_id_to_token: &mut Vec<Box<str>>,
+        token_id_to_roaringish_packed: &mut Vec<RoaringishPacked>,
+        next_token_id: &mut u32,
     ) {
         if sequence.len() <= 1 {
             return;
@@ -97,52 +119,83 @@ where
             let e = (sequence.len() + 1).min(i + MAX_SEQ_LEN + 1);
             for j in b..e {
                 let token: String = sequence[i..j]
-                    .into_iter()
-                    .map(|s| *s)
+                    .iter()
+                    .map(|token_id| token_id_to_token[*token_id as usize].as_ref())
                     .intersperse(" ")
                     .collect();
-                let (_, pos) = token_to_positions
-                    .raw_entry_mut()
-                    .from_key(token.as_str())
-                    .or_insert_with(|| (token.into_boxed_str(), Vec::new()));
-                pos.push((begin_pos + i) as u32);
+
+                let token = token.as_str();
+                let token_id = Self::get_token_id(
+                    token,
+                    token_to_token_id,
+                    token_id_to_token,
+                    token_id_to_roaringish_packed,
+                    next_token_id,
+                );
+
+                token_id_to_positions
+                .entry(token_id)
+                .or_default()
+                .push((begin_pos + i) as u32);
             }
         }
+    }
+
+    fn get_token_id(
+        token: &str,
+        token_to_token_id: &mut AHashMap<Box<str>, u32>,
+        token_id_to_token: &mut Vec<Box<str>>,
+        token_id_to_roaringish_packed: &mut Vec<RoaringishPacked>,
+        next_token_id: &mut u32,
+    ) -> u32 {
+        let (_, token_id) = token_to_token_id
+            .raw_entry_mut()
+            .from_key(token)
+            .or_insert_with(|| {
+                let current_token_id = *next_token_id;
+                *next_token_id += 1;
+                (token.to_string().into_boxed_str(), current_token_id)
+            });
+
+        if *token_id as usize >= token_id_to_token.len() {
+            token_id_to_token.push(token.to_string().into_boxed_str());
+            token_id_to_roaringish_packed.push(RoaringishPacked::default());
+        }
+
+        *token_id
     }
 
     fn index_doc(
         &mut self,
         content: &str,
         doc_id: u32,
-        mut count_freq: impl FnMut(&Box<str>),
-    ) -> Vec<Box<str>> {
+        mut count_freq: impl FnMut(&str),
+    ) -> Vec<u32> {
         let mut tokenized_doc = Vec::new();
-        let mut token_to_positions: AHashMap<&str, Vec<u32>> = AHashMap::new();
+        let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
-            let owned_token = token.to_owned().into_boxed_str();
-            count_freq(&owned_token);
+            let token_id = Self::get_token_id(
+                token,
+                &mut self.token_to_token_id,
+                &mut self.token_id_to_token,
+                &mut self.token_id_to_roaringish_packed,
+                &mut self.next_token_id,
+            );
+            
+            count_freq(token);
 
-            token_to_positions
-                .entry(token)
+            token_id_to_positions
+                .entry(token_id)
                 .or_default()
                 .push(pos as u32);
-            tokenized_doc.push(owned_token);
+            tokenized_doc.push(token_id);
         }
 
-        for (token, positions) in token_to_positions.iter() {
-            let (_, packed) = self
-                .token_to_packed
-                .raw_entry_mut()
-                .from_key(*token)
-                .or_insert_with(|| {
-                    (
-                        token.to_string().into_boxed_str(),
-                        RoaringishPacked::default(),
-                    )
-                });
-            packed.push(doc_id, positions);
+        for (token_id, positions) in token_id_to_positions.iter() {
+            self.token_id_to_roaringish_packed[*token_id as usize].push(doc_id, positions);
         }
+
         tokenized_doc
     }
 
@@ -153,7 +206,7 @@ where
 
         self.generate_common_tokens(common_tokens);
 
-        db.write_token_to_roaringish_packed(rwtxn, &self.token_to_packed, mmap_size);
+        db.write_token_to_roaringish_packed(rwtxn, &self.token_to_token_id, &self.token_id_to_roaringish_packed, mmap_size);
         db.write_doc_id_to_document(rwtxn, &self.doc_ids, &self.documents);
 
         self.clear();
@@ -161,13 +214,14 @@ where
 
     fn generate_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
         let mut sequence = Vec::new();
-        for (token_id_repr, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
-            let mut token_to_positions: AHashMap<Box<str>, Vec<u32>> = AHashMap::new();
+        for (tokenized_doc, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
+            let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
             sequence.clear();
             let mut begin_pos = 0;
-            for (pos, token) in token_id_repr.iter().enumerate() {
+            for (pos, token_id) in tokenized_doc.iter().enumerate() {
+                let token = &self.token_id_to_token[*token_id as usize];
                 if common_tokens.contains(token.as_str()) {
-                    sequence.push(token.as_str());
+                    sequence.push(*token_id);
                     continue;
                 }
 
@@ -177,26 +231,32 @@ where
                     continue;
                 }
 
-                Self::analyze_common_tokens_sequence(&sequence, begin_pos, &mut token_to_positions);
+                Self::analyze_common_tokens_sequence(
+                    &sequence,
+                    begin_pos,
+                    &mut token_id_to_positions,
+                    &mut self.token_to_token_id,
+                    &mut self.token_id_to_token,
+                    &mut self.token_id_to_roaringish_packed,
+                    &mut self.next_token_id,
+                );
 
                 sequence.clear();
                 begin_pos = pos + 1;
             }
 
-            Self::analyze_common_tokens_sequence(&sequence, begin_pos, &mut token_to_positions);
+            Self::analyze_common_tokens_sequence(
+                &sequence,
+                begin_pos,
+                &mut token_id_to_positions,
+                &mut self.token_to_token_id,
+                &mut self.token_id_to_token,
+                &mut self.token_id_to_roaringish_packed,
+                &mut self.next_token_id,
+            );
 
-            for (token, positions) in token_to_positions.iter() {
-                let (_, packed) = self
-                    .token_to_packed
-                    .raw_entry_mut()
-                    .from_key(token)
-                    .or_insert_with(|| {
-                        (
-                            token.to_string().into_boxed_str(),
-                            RoaringishPacked::default(),
-                        )
-                    });
-                packed.push(*doc_id, positions);
+            for (token_id, positions) in token_id_to_positions.iter() {
+                self.token_id_to_roaringish_packed[*token_id as usize].push(*doc_id, positions);
             }
         }
     }
@@ -277,11 +337,11 @@ impl Indexer {
             let doc_id = next_doc_id;
             next_doc_id += 1;
 
-            batch.push(doc_id, content.as_ref(), doc, |owned_token| {
+            batch.push(doc_id, content.as_ref(), doc, |token| {
                 let (_, freq) = token_to_freq
                     .raw_entry_mut()
-                    .from_key(owned_token.as_str())
-                    .or_insert_with(|| (owned_token.clone(), 0));
+                    .from_key(token)
+                    .or_insert_with(|| (token.to_owned().into_boxed_str(), 0));
                 *freq += 1;
             });
 
@@ -291,6 +351,7 @@ impl Indexer {
         }
 
         let common_tokens = self.generate_common_tokens(&token_to_freq);
+        drop(token_to_freq);
 
         batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size);
         println!("flushed batch in {}", b.elapsed().as_secs());

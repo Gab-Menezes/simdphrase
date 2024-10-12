@@ -218,7 +218,7 @@ fn index_msmarco(args: IndexFile) {
     // let num_docs = indexer.index(it);
     // indexer.flush();
 
-    let indexer = Indexer::new(Some(400000), Some(CommonTokens::FixedNum(50)), Some(1460));
+    let indexer = Indexer::new(Some(500000), Some(CommonTokens::FixedNum(50)), Some(1460));
     let num_docs = indexer.index(it, &args.index_name, args.db_size);
 
     println!(

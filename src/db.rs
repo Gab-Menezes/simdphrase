@@ -248,15 +248,19 @@ where
     pub(crate) fn write_token_to_roaringish_packed(
         &self,
         rwtxn: &mut RwTxn,
-        token_to_token_packed: &AHashMap<Box<str>, RoaringishPacked>,
+        token_to_token_id: &AHashMap<Box<str>, u32>,
+        token_id_to_roaringish_packed: &[RoaringishPacked],
         mmap_size: &mut usize,
     ) {
-        let mut token_to_token_packed: Vec<_> = token_to_token_packed.into_iter().collect();
-        token_to_token_packed.sort_by(|(t0, _), (t1, _)| t0.cmp(t1));
-        for (token, packed) in token_to_token_packed.into_iter() {
+        let mut token_to_token_id: Vec<_> = token_to_token_id.iter().collect();
+        token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
+    
+        for (token, token_id) in token_to_token_id.into_iter() {
             if token.len() > 511 {
                 continue;
             }
+
+            let packed = &token_id_to_roaringish_packed[*token_id as usize];
 
             let Ok(achived_packed) = self.db_token_to_packed.get(rwtxn, token) else {
                 continue;
