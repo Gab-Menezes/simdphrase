@@ -1,6 +1,6 @@
 use std::mem::MaybeUninit;
 
-use crate::{allocator::Aligned64, roaringish::BorrowRoaringishPacked};
+use crate::{allocator::Aligned64, roaringish::AlignedBorrowRoaringishPacked};
 
 use super::{private::IntersectSeal, Intersect};
 
@@ -9,8 +9,8 @@ impl IntersectSeal for NaiveIntersect {}
 
 impl Intersect for NaiveIntersect {
     fn inner_intersect<const FIRST: bool>(
-        lhs: &BorrowRoaringishPacked,
-        rhs: &BorrowRoaringishPacked,
+        lhs: &AlignedBorrowRoaringishPacked,
+        rhs: &AlignedBorrowRoaringishPacked,
 
         lhs_i: &mut usize,
         rhs_i: &mut usize,
@@ -65,8 +65,8 @@ impl Intersect for NaiveIntersect {
     }
 
     fn intersection_buffer_size(
-        lhs: &BorrowRoaringishPacked,
-        rhs: &BorrowRoaringishPacked,
+        lhs: &AlignedBorrowRoaringishPacked,
+        rhs: &AlignedBorrowRoaringishPacked,
     ) -> usize {
         lhs.doc_id_groups.len().min(rhs.doc_id_groups.len())
     }

@@ -5,10 +5,12 @@
 #![feature(pointer_is_aligned_to)]
 #![feature(allocator_api)]
 
+use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use phrase_search::{naive::NaiveIntersect, CommonTokens, Indexer, Searcher, Stats};
+use hyperloglogplus::HyperLogLog;
+use phrase_search::{naive::NaiveIntersect, normalize, tokenize, CommonTokens, Indexer, Searcher, Stats};
 use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
@@ -19,7 +21,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     path::PathBuf,
-    ptr::NonNull,
+    ptr::NonNull, time::Duration,
 };
 
 #[derive(Parser, Debug)]
@@ -207,20 +209,8 @@ fn index_msmarco(args: IndexFile) {
     });
 
     let b = std::time::Instant::now();
-
-    // let mut indexer = Indexer::new(
-    //     &args.index_name,
-    //     args.db_size,
-    //     Some(500000),
-    //     Some(CommonTokens::FixedNum(50)),
-    //     Some(1460),
-    // );
-    // let num_docs = indexer.index(it);
-    // indexer.flush();
-
-    let indexer = Indexer::new(Some(500000), Some(CommonTokens::FixedNum(50)), Some(1460));
+    let indexer = Indexer::new(Some(500000), Some(CommonTokens::FixedNum(50)));
     let num_docs = indexer.index(it, &args.index_name, args.db_size);
-
     println!(
         "Whole Indexing took {:?} ({num_docs} documents)",
         b.elapsed()
@@ -231,7 +221,7 @@ fn main() {
     let args = CommandArgs::parse();
 
     // spawn rayon threads to avoid unecessary respawn
-    rayon::ThreadPoolBuilder::new().build_global().unwrap();
+    // rayon::ThreadPoolBuilder::new().build_global().unwrap();
 
     match args.ty {
         // Ty::IndexText(arg) => index_text(arg),

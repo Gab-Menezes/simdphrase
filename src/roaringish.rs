@@ -101,9 +101,37 @@ impl RoaringishPacked {
     }
 }
 
-impl ArchivedRoaringishPacked {
-    pub fn concat(&self, other: &RoaringishPacked) -> RoaringishPacked {
-        unsafe fn copy_data<T, U>(dest: &mut [MaybeUninit<T>], lhs: &[U], rhs: &[T]) {
+pub enum RoaringishPackedKind<'a> {
+    Owned(RoaringishPacked),
+    Archived(&'a ArchivedRoaringishPacked),
+}
+
+impl<'a> RoaringishPackedKind<'a> {
+    pub fn as_bytes(&self) -> (&[u8], &[u8]) {
+        match self {
+            RoaringishPackedKind::Owned(packed) => unsafe {
+                let (l, doc_id_groups, r) = packed.doc_id_groups.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                let (l, values, r) = packed.values.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                (doc_id_groups, values)
+            },
+            RoaringishPackedKind::Archived(packed) => unsafe {
+                let (l, doc_id_groups, r) = packed.doc_id_groups.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                let (l, values, r) = packed.values.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                (doc_id_groups, values)
+            },
+        }
+    }
+
+    pub fn concat<'b: 'a>(self, other: RoaringishPackedKind<'b>) -> RoaringishPackedKind<'b> {
+        unsafe fn copy_data<T, U>(dest: &mut [MaybeUninit<T>], lhs: &[U], rhs: &[U]) {
             let (l, buf, r) = dest.align_to_mut::<MaybeUninit<u8>>();
             debug_assert!(l.is_empty());
             debug_assert!(r.is_empty());
@@ -120,29 +148,33 @@ impl ArchivedRoaringishPacked {
             buf[lhs.len()..].copy_from_slice(rhs);
         }
 
-        let n = self.doc_id_groups.len() + other.doc_id_groups.len();
-        let mut doc_id_groups = Box::new_uninit_slice(n);
-        let mut values = Box::new_uninit_slice(n);
+        let r = match (self, other) {
+            (RoaringishPackedKind::Owned(mut lhs), RoaringishPackedKind::Archived(rhs)) => {
+                lhs.doc_id_groups.extend(rhs.doc_id_groups.iter().map(|v| v.to_native()));
+                lhs.values.extend(rhs.values.iter().map(|v| v.to_native()));
+                lhs
+            },
+            (RoaringishPackedKind::Archived(lhs), RoaringishPackedKind::Archived(rhs)) => {
+                let n = lhs.doc_id_groups.len() + rhs.doc_id_groups.len();
+                let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(n);
+                let mut values: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(n);
 
-        unsafe {
-            copy_data(&mut doc_id_groups, &self.doc_id_groups, &other.doc_id_groups);
-            copy_data(&mut values, &self.values, &other.values);
-        }
-
-        unsafe {
-            RoaringishPacked {
-                doc_id_groups: Vec::from_raw_parts(
-                    Box::into_raw(doc_id_groups) as *mut _,
-                    n,
-                    n
-                ),
-                values: Vec::from_raw_parts(
-                    Box::into_raw(values) as *mut _,
-                    n,
-                    n
-                ),
+                unsafe {
+                    copy_data(&mut doc_id_groups, &lhs.doc_id_groups, &rhs.doc_id_groups);
+                    copy_data(&mut values, &lhs.values, &rhs.values);
+                    RoaringishPacked {
+                        doc_id_groups: Vec::from_raw_parts(
+                            Box::into_raw(doc_id_groups) as *mut _,
+                            n,
+                            n,
+                        ),
+                        values: Vec::from_raw_parts(Box::into_raw(values) as *mut _, n, n),
+                    }
+                }
             }
-        }
+            _ => panic!("This type of append should never happen"),
+        };
+        RoaringishPackedKind::Owned(r)
     }
 }
 
@@ -161,20 +193,25 @@ impl Default for AlignedRoaringishPacked {
     }
 }
 
-pub struct BorrowRoaringishPacked<'a> {
+pub struct AlignedBorrowRoaringishPacked<'a> {
     pub(crate) doc_id_groups: &'a [u64],
     pub(crate) values: &'a [u16],
 }
 
-impl<'a> BorrowRoaringishPacked<'a> {
-    pub unsafe fn new_raw(doc_id_groups: &'a [u64], values: &'a [u16]) -> Self {
-        Self { doc_id_groups, values }
-    }
-
+impl<'a> AlignedBorrowRoaringishPacked<'a> {
     pub fn new(packed: &'a AlignedRoaringishPacked) -> Self {
-        BorrowRoaringishPacked {
+        AlignedBorrowRoaringishPacked {
             doc_id_groups: &packed.doc_id_groups,
             values: &packed.values,
+        }
+    }
+
+    pub fn new_raw(doc_id_groups: &'a [u64], values: &'a [u16]) -> Self {
+        assert!(doc_id_groups.as_ptr().is_aligned_to(64));
+        assert!(values.as_ptr().is_aligned_to(16));
+        Self {
+            doc_id_groups,
+            values,
         }
     }
 
@@ -236,7 +273,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = BorrowRoaringishPacked::new_doc_id_groups(&msb_doc_id_groups);
+        let msb_packed = AlignedBorrowRoaringishPacked::new_doc_id_groups(&msb_doc_id_groups);
         let b = std::time::Instant::now();
         let (msb_doc_id_groups, msb_values_intersect, _) = I::intersect::<false>(&msb_packed, &rhs);
         stats
@@ -346,7 +383,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
         };
         if rhs_len > 1 {
             let b = std::time::Instant::now();
-            let borrow = BorrowRoaringishPacked::new(&packed);
+            let borrow = AlignedBorrowRoaringishPacked::new(&packed);
             let r = &borrow + (rhs_len - 1);
             stats
                 .add_rhs
@@ -358,7 +395,7 @@ impl<'a> BorrowRoaringishPacked<'a> {
     }
 }
 
-impl<'a> Add<u32> for &BorrowRoaringishPacked<'a> {
+impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
     type Output = AlignedRoaringishPacked;
 
     fn add(self, rhs: u32) -> Self::Output {

@@ -1,7 +1,9 @@
 use std::{
-    collections::{BTreeSet, HashSet},
+    cmp::Reverse,
+    collections::{BTreeSet, BinaryHeap, HashSet},
     fmt::Debug,
     fs::File,
+    io::BufWriter,
     path::Path,
     sync::atomic::{AtomicU64, Ordering::Relaxed},
 };
@@ -14,17 +16,23 @@ use heed::{
 };
 use memmap2::{Mmap, MmapMut};
 use rkyv::{
-    api::high::HighSerializer, deserialize, ser::allocator::ArenaHandle, util::AlignedVec, Archive,
-    Deserialize, Serialize,
+    api::high::HighSerializer,
+    boxed::ArchivedBox,
+    deserialize,
+    ser::{allocator::ArenaHandle, writer::IoWriter},
+    util::AlignedVec,
+    Archive, Archived, Deserialize, Serialize,
 };
 
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
     normalize,
-    roaringish::{intersect::Intersect, RoaringishPacked},
+    roaringish::{
+        intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind,
+    },
     tokenize,
     utils::MAX_SEQ_LEN,
-    BorrowRoaringishPacked,
+    AlignedBorrowRoaringishPacked,
 };
 
 mod db_constants {
@@ -33,6 +41,7 @@ mod db_constants {
     pub const DB_TOKEN_TO_PACKED: &'static str = "token_to_packed";
     pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
     pub const ROARINGISH_PACKED_FILE: &'static str = "roaringish_packed";
+    pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "token_to_packed";
 }
 
 #[derive(Default)]
@@ -165,7 +174,6 @@ where
     db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
     db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
-    db_token_to_packed: Database<Str, ZeroCopyCodec<RoaringishPacked>>,
 }
 
 unsafe impl<D> Send for DB<D> where
@@ -194,7 +202,7 @@ where
 
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(3)
+                .max_dbs(2)
                 .map_size(db_size)
                 .flags(EnvFlags::WRITE_MAP | EnvFlags::MAP_ASYNC)
                 .open(path)
@@ -217,10 +225,6 @@ where
             .create_database(&mut wrtxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))
             .unwrap();
 
-        let db_token_to_packed = env
-            .create_database(&mut wrtxn, Some(db_constants::DB_TOKEN_TO_PACKED))
-            .unwrap();
-
         wrtxn.commit().unwrap();
 
         Self {
@@ -228,7 +232,6 @@ where
             db_main,
             db_doc_id_to_document,
             db_token_to_offsets,
-            db_token_to_packed,
         }
     }
 
@@ -247,56 +250,75 @@ where
 
     pub(crate) fn write_token_to_roaringish_packed(
         &self,
-        rwtxn: &mut RwTxn,
-        token_to_token_id: &AHashMap<Box<str>, u32>,
-        token_id_to_roaringish_packed: &[RoaringishPacked],
+        token_to_token_id: AHashMap<Box<str>, u32>,
+        mut token_id_to_roaringish_packed: Vec<RoaringishPacked>,
         mmap_size: &mut usize,
+        batch_id: u32,
     ) {
-        let mut token_to_token_id: Vec<_> = token_to_token_id.iter().collect();
-        token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
-    
-        for (token, token_id) in token_to_token_id.into_iter() {
-            if token.len() > 511 {
-                continue;
-            }
+        let mut token_to_packed: Vec<_> = token_to_token_id
+            .into_iter()
+            .map(|(token, token_id)| {
+                let packed = std::mem::take(&mut token_id_to_roaringish_packed[token_id as usize]);
+                *mmap_size += packed.size_bytes();
+                (token, packed)
+            })
+            .collect();
+        token_to_packed.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
 
-            let packed = &token_id_to_roaringish_packed[*token_id as usize];
+        let file_name = format!("{}_{batch_id}", db_constants::TEMP_FILE_TOKEN_TO_PACKED);
+        let file = IoWriter::new(BufWriter::new(
+            File::options()
+                .create(true)
+                .truncate(true)
+                .read(true)
+                .write(true)
+                .open(self.env.path().join(file_name))
+                .unwrap(),
+        ));
+        rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&token_to_packed, file).unwrap();
 
-            let Ok(achived_packed) = self.db_token_to_packed.get(rwtxn, token) else {
-                continue;
-            };
+        // let mut token_to_token_id: Vec<_> = token_to_token_id.into_iter().collect();
+        // token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
 
-            *mmap_size += packed.size_bytes();
+        // for (token, token_id) in token_to_token_id.into_iter() {
+        //     if token.len() > 511 {
+        //         continue;
+        //     }
 
-            match achived_packed {
-                Some(achived_packed) => {
-                    let packed = achived_packed.concat(packed);
-                    self.db_token_to_packed.put(rwtxn, token, &packed).unwrap()
-                }
-                None => {
-                    // padding
-                    *mmap_size += 64 + 16;
-                    self.db_token_to_packed.put(rwtxn, token, packed).unwrap()
-                }
-            }
-        }
+        //     let packed = &token_id_to_roaringish_packed[*token_id as usize];
+
+        //     let Ok(achived_packed) = self.db_token_to_packed.get(rwtxn, token) else {
+        //         continue;
+        //     };
+
+        //     *mmap_size += packed.size_bytes();
+
+        //     match achived_packed {
+        //         Some(achived_packed) => {
+        //             let packed = achived_packed.concat(packed);
+        //             self.db_token_to_packed.put(rwtxn, token, &packed).unwrap()
+        //         }
+        //         None => {
+        //             // padding
+        //             *mmap_size += 64 + 16;
+        //             self.db_token_to_packed.put(rwtxn, token, packed).unwrap()
+        //         }
+        //     }
+        // }
     }
 
-    pub(crate) fn generate_mmap_file(&self, mmap_size: usize, rwtxn: &mut RwTxn) {
+    pub(crate) fn generate_mmap_file(
+        &self,
+        number_of_distinct_tokens: u64,
+        mmap_size: usize,
+        number_of_batches: u32,
+        rwtxn: &mut RwTxn,
+    ) {
         #[inline(always)]
-        fn to_bytes<T>(v: &[T]) -> &[u8] {
-            unsafe {
-                let s = v.len() * std::mem::size_of::<T>();
-                let t = std::ptr::slice_from_raw_parts(v as *const _ as *const _, s);
-                &*t
-            }
-        }
-
-        #[inline(always)]
-        unsafe fn write_to_mmap<T, const N: usize>(
+        unsafe fn write_to_mmap<const N: usize>(
             mmap: &mut MmapMut,
             mmap_offset: &mut usize,
-            v: &[T],
+            bytes: &[u8],
         ) -> (usize, usize) {
             let ptr = mmap.as_ptr().add(*mmap_offset);
             let offset = ptr.align_offset(N);
@@ -304,7 +326,6 @@ where
                 panic!("We fucked up, writing out of bounds");
             }
             *mmap_offset += offset;
-            let bytes = to_bytes(&v);
             mmap[*mmap_offset..*mmap_offset + bytes.len()].copy_from_slice(bytes);
 
             let begin = *mmap_offset;
@@ -319,38 +340,122 @@ where
             .write(true)
             .open(self.env.path().join(db_constants::ROARINGISH_PACKED_FILE))
             .unwrap();
-        file.set_len(mmap_size as u64).unwrap();
+        file.set_len(mmap_size as u64 + (number_of_distinct_tokens * (64 + 16)))
+            .unwrap();
         let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         let mut mmap_offset = 0;
 
-        let mut token_to_offset = Vec::new();
-        for r in self.db_token_to_packed.iter(rwtxn).unwrap() {
-            let (token, roaringish_packed) = r.unwrap();
+        // we need to do this in 3 steps because of the borrow checker
+        let files_mmaps: Vec<_> = (0..number_of_batches)
+            .map(|i| {
+                let file_name = format!("{}_{i}", db_constants::TEMP_FILE_TOKEN_TO_PACKED);
+                let file = File::options()
+                    .read(true)
+                    .open(self.env.path().join(file_name))
+                    .unwrap();
+                unsafe { Mmap::map(&file).unwrap() }
+            })
+            .collect();
+        let files_data: Vec<_> = files_mmaps
+            .iter()
+            .map(|mmap| unsafe {
+                rkyv::access_unchecked::<Archived<Vec<(Box<str>, RoaringishPacked)>>>(mmap)
+            })
+            .collect();
+        let mut iters: Vec<_> = files_data
+            .iter()
+            .map(|tokens_to_packeds| tokens_to_packeds.iter())
+            .collect();
+
+        struct ToMerge<'a> {
+            token: &'a ArchivedBox<str>,
+            packed: &'a ArchivedRoaringishPacked,
+            i: usize,
+        }
+        impl<'a> PartialEq for ToMerge<'a> {
+            fn eq(&self, other: &Self) -> bool {
+                self.token == other.token && self.i == other.i
+            }
+        }
+        impl<'a> Eq for ToMerge<'a> {}
+        impl<'a> PartialOrd for ToMerge<'a> {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                match self.token.partial_cmp(other.token) {
+                    Some(std::cmp::Ordering::Equal) => self.i.partial_cmp(&other.i),
+                    ord => ord,
+                }
+            }
+        }
+        impl<'a> Ord for ToMerge<'a> {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                match self.token.cmp(other.token) {
+                    std::cmp::Ordering::Equal => self.i.cmp(&other.i),
+                    ord => ord,
+                }
+            }
+        }
+
+        let mut heap = BinaryHeap::new();
+        for (i, it) in iters.iter_mut().enumerate() {
+            match it.next() {
+                Some(token_to_packed) => heap.push(Reverse(ToMerge {
+                    token: &token_to_packed.0,
+                    packed: &token_to_packed.1,
+                    i,
+                })),
+                None => {}
+            }
+        }
+
+        while let Some(token_to_packed) = heap.pop() {
+            let to_merge = token_to_packed.0;
+            if let Some(token_to_packed) = (&mut iters[to_merge.i]).next() {
+                heap.push(Reverse(ToMerge {
+                    token: &token_to_packed.0,
+                    packed: &token_to_packed.1,
+                    i: to_merge.i,
+                }));
+            }
+
+            let mut packed_kind = RoaringishPackedKind::Archived(&to_merge.packed);
+            loop {
+                let Some(next_to_merge) = heap.peek() else {
+                    break;
+                };
+
+                if next_to_merge.0.token != to_merge.token {
+                    break;
+                }
+
+                let next_to_merge = heap.pop().unwrap().0;
+                if let Some(token_to_packed) = (&mut iters[next_to_merge.i]).next() {
+                    heap.push(Reverse(ToMerge {
+                        token: &token_to_packed.0,
+                        packed: &token_to_packed.1,
+                        i: next_to_merge.i,
+                    }));
+                }
+
+                let next_to_merge_kind = RoaringishPackedKind::Archived(next_to_merge.packed);
+                packed_kind = packed_kind.concat(next_to_merge_kind);
+            }
+
+            let (doc_id_groups, values) = packed_kind.as_bytes();
             let offset = unsafe {
-                let (begin, doc_id_group_len) = write_to_mmap::<_, 64>(
-                    &mut mmap,
-                    &mut mmap_offset,
-                    &roaringish_packed.doc_id_groups,
-                );
-                let (_, values_len) =
-                    write_to_mmap::<_, 16>(&mut mmap, &mut mmap_offset, &roaringish_packed.values);
+                let (begin, doc_id_group_len) =
+                    write_to_mmap::<64>(&mut mmap, &mut mmap_offset, doc_id_groups);
+                let (_, values_len) = write_to_mmap::<16>(&mut mmap, &mut mmap_offset, values);
                 Offset {
                     begin: begin as u64,
                     doc_id_group_len: doc_id_group_len as u64,
                     values_len: values_len as u64,
                 }
             };
-            token_to_offset.push((token.to_owned(), offset));
-        }
-        token_to_offset.sort_by(|(t0, _), (t1, _)| t0.cmp(t1));
 
-        for (token, offset) in token_to_offset.iter() {
             self.db_token_to_offsets
-                .put_with_flags(rwtxn, PutFlags::APPEND, token, &offset)
+                .put_with_flags(rwtxn, PutFlags::APPEND, to_merge.token, &offset)
                 .unwrap();
         }
-
-        self.db_token_to_packed.clear(rwtxn).unwrap();
     }
 
     fn read_common_tokens(
@@ -376,7 +481,7 @@ where
     pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<String>, Mmap) {
         let env = unsafe {
             EnvOpenOptions::new()
-                .max_dbs(3)
+                .max_dbs(2)
                 .map_size(db_size)
                 .flags(EnvFlags::READ_ONLY)
                 .open(path)
@@ -401,11 +506,6 @@ where
             .unwrap()
             .unwrap();
 
-        let db_token_to_packed = env
-            .open_database(&rotxn, Some(db_constants::DB_TOKEN_TO_PACKED))
-            .unwrap()
-            .unwrap();
-
         let common_tokens = Self::read_common_tokens(&rotxn, db_main);
 
         rotxn.commit().unwrap();
@@ -419,7 +519,6 @@ where
                 db_main,
                 db_doc_id_to_document,
                 db_token_to_offsets,
-                db_token_to_packed,
             },
             common_tokens,
             mmap,
@@ -474,7 +573,7 @@ where
         rotxn: &RoTxn,
         token: &str,
         mmap: &'a Mmap,
-    ) -> Option<BorrowRoaringishPacked<'a>> {
+    ) -> Option<AlignedBorrowRoaringishPacked<'a>> {
         let offset = self.db_token_to_offsets.get(rotxn, token).unwrap()?;
 
         let begin = offset.begin.to_native() as usize;
@@ -493,7 +592,10 @@ where
         assert!(l.is_empty());
         assert!(r.is_empty());
 
-        unsafe { Some(BorrowRoaringishPacked::new_raw(doc_id_groups, values)) }
+        Some(AlignedBorrowRoaringishPacked::new_raw(
+            doc_id_groups,
+            values,
+        ))
     }
 
     pub fn search<I: Intersect>(
@@ -563,20 +665,20 @@ where
                 .add_lhs
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-            let lhs = BorrowRoaringishPacked::new(&lhs);
+            let lhs = AlignedBorrowRoaringishPacked::new(&lhs);
             lhs.intersect::<I>(rhs, *rhs_len, stats)
         } else {
             lhs.intersect::<I>(rhs, *rhs_len, stats)
         };
-        let mut borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+        let mut borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
 
         for (t, t_len) in it {
             let rhs = token_to_packed.get(t).unwrap();
             lhs = borrow_lhs.intersect::<I>(rhs, *t_len, stats);
-            borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+            borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
         }
 
-        borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+        borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
         borrow_lhs.get_doc_ids()
     }
 }

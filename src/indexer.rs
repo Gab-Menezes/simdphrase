@@ -3,6 +3,7 @@ use std::{cell::Cell, cmp::Reverse, collections::HashSet, path::Path};
 use ahash::{AHashMap, AHashSet, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use heed::RwTxn;
+use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
@@ -26,6 +27,9 @@ where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive,
 {
+    batch_id: u32,
+    hllp_tokens: HyperLogLogPlus<Box<str>, ahash::RandomState>,
+
     next_token_id: u32,
     token_to_token_id: AHashMap<Box<str>, u32>,
 
@@ -45,43 +49,22 @@ where
         + Archive
         + 'static,
 {
-    fn new(batch_size: Option<u32>, avg_document_tokens: Option<u32>) -> Self {
-        match batch_size {
-            Some(batch_size) => match avg_document_tokens {
-                Some(avg_document_tokens) => {
-                    // Heap's Law
-                    let len = (1.705 * (batch_size as f64 * avg_document_tokens as f64).powf(0.786))
-                        .ceil() as usize;
-                    Self {
-                        next_token_id: 0,
-                        token_to_token_id: AHashMap::with_capacity(len),
-                        token_id_to_roaringish_packed: Vec::with_capacity(len),
-                        token_id_to_token: Vec::with_capacity(len),
-                        tokenized_docs: Vec::with_capacity(len),
-                        doc_ids: Vec::with_capacity(batch_size as usize),
-                        documents: Vec::with_capacity(batch_size as usize),
-                    }
-                }
-                None => Self {
-                    next_token_id: 0,
-                    token_to_token_id: AHashMap::new(),
-                    token_id_to_roaringish_packed: Vec::new(),
-                    token_id_to_token: Vec::new(),
-                    tokenized_docs: Vec::new(),
-                    doc_ids: Vec::with_capacity(batch_size as usize),
-                    documents: Vec::with_capacity(batch_size as usize),
-                },
-            },
-            None => Self {
-                next_token_id: 0,
-                token_to_token_id: AHashMap::new(),
-                token_id_to_roaringish_packed: Vec::new(),
-                token_id_to_token: Vec::new(),
-                tokenized_docs: Vec::new(),
-                doc_ids: Vec::new(),
-                documents: Vec::new(),
-            },
+    fn new() -> Self {
+        Self {
+            batch_id: 0,
+            hllp_tokens: HyperLogLogPlus::new(18, ahash::RandomState::new()).unwrap(),
+            next_token_id: 0,
+            token_to_token_id: AHashMap::new(),
+            token_id_to_roaringish_packed: Vec::new(),
+            token_id_to_token: Vec::new(),
+            doc_ids: Vec::new(),
+            documents: Vec::new(),
+            tokenized_docs: Vec::new(),
         }
+    }
+
+    fn estimate_number_of_distinct_tokens(&mut self) -> u64 {
+        (self.hllp_tokens.count() * 1.015f64) as u64
     }
 
     fn clear(&mut self) {
@@ -175,6 +158,8 @@ where
         let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
+            self.hllp_tokens.insert(token);
+
             let token_id = Self::get_token_id(
                 token,
                 &mut self.token_to_token_id,
@@ -182,7 +167,7 @@ where
                 &mut self.token_id_to_roaringish_packed,
                 &mut self.next_token_id,
             );
-            
+
             count_freq(token);
 
             token_id_to_positions
@@ -204,15 +189,19 @@ where
             return;
         }
 
-        self.generate_common_tokens(common_tokens);
+        self.combine_common_tokens(common_tokens);
+        
+        let token_to_token_id = std::mem::take(&mut self.token_to_token_id);
+        let token_id_to_roaringish_packed = std::mem::take(&mut self.token_id_to_roaringish_packed);
 
-        db.write_token_to_roaringish_packed(rwtxn, &self.token_to_token_id, &self.token_id_to_roaringish_packed, mmap_size);
+        db.write_token_to_roaringish_packed(token_to_token_id, token_id_to_roaringish_packed, mmap_size, self.batch_id);
         db.write_doc_id_to_document(rwtxn, &self.doc_ids, &self.documents);
 
+        self.batch_id += 1;
         self.clear();
     }
 
-    fn generate_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
+    fn combine_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
         let mut sequence = Vec::new();
         for (tokenized_doc, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
             let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
@@ -265,19 +254,16 @@ where
 pub struct Indexer {
     batch_size: Option<u32>,
     common_tokens: Option<CommonTokens>,
-    avg_document_tokens: Option<u32>,
 }
 
 impl Indexer {
     pub fn new(
         batch_size: Option<u32>,
         common_tokens: Option<CommonTokens>,
-        avg_document_tokens: Option<u32>,
     ) -> Self {
         Self {
             batch_size,
             common_tokens,
-            avg_document_tokens,
         }
     }
 
@@ -323,7 +309,7 @@ impl Indexer {
         let db = DB::truncate(&path, db_size);
         let mut rwtxn = db.env.write_txn().unwrap();
 
-        let mut batch = Batch::new(self.batch_size, self.avg_document_tokens);
+        let mut batch = Batch::new();
 
         let batch_size = self.batch_size.unwrap_or(u32::MAX);
         let mut it = docs.into_iter();
@@ -373,9 +359,11 @@ impl Indexer {
         batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size);
         println!("flushed batch in {}", b.elapsed().as_secs());
 
-        b = std::time::Instant::now();
+        let number_of_distinct_tokens = batch.estimate_number_of_distinct_tokens();
+
         db.write_common_tokens(&mut rwtxn, &common_tokens);
-        db.generate_mmap_file(mmap_size, &mut rwtxn);
+        b = std::time::Instant::now();
+        db.generate_mmap_file(number_of_distinct_tokens, mmap_size, batch.batch_id, &mut rwtxn);
         println!("write mmap {}", b.elapsed().as_secs());
         rwtxn.commit().unwrap();
 
