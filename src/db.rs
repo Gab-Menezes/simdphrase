@@ -465,9 +465,9 @@ where
     fn read_common_tokens(
         rotxn: &RoTxn,
         db_main: Database<Unspecified, Unspecified>,
-    ) -> HashSet<String> {
+    ) -> HashSet<Box<str>> {
         let k = db_main
-            .remap_types::<Str, ZeroCopyCodec<HashSet<String>>>()
+            .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
             .get(rotxn, db_constants::KEY_COMMON_TOKENS)
             .unwrap()
             .unwrap();
@@ -482,7 +482,7 @@ where
             .unwrap();
     }
 
-    pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<String>, Mmap) {
+    pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<Box<str>>, Mmap) {
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)
@@ -533,7 +533,7 @@ where
     pub(crate) fn merge_tokens(
         &self,
         tokens: &[&str],
-        common_tokens: &HashSet<String>,
+        common_tokens: &HashSet<Box<str>>,
     ) -> Vec<(String, u32)> {
         let mut final_tokens = Vec::with_capacity(tokens.len());
         let mut sequence = Vec::with_capacity(tokens.len());
@@ -606,7 +606,7 @@ where
         &self,
         q: &str,
         stats: &Stats,
-        common_tokens: &HashSet<String>,
+        common_tokens: &HashSet<Box<str>>,
         mmap: &Mmap,
     ) -> Vec<u32> {
         let b = std::time::Instant::now();

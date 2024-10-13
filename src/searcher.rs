@@ -16,7 +16,9 @@ where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive,
 {
-    pub(crate) shards: Box<[(DB<D>, HashSet<String>, Mmap)]>,
+    db: DB<D>,
+    common_tokens: HashSet<Box<str>>,
+    mmap: Mmap,
 }
 
 impl<D> Searcher<D>
@@ -33,19 +35,12 @@ where
         let mut paths = paths?;
         paths.sort_unstable();
 
-        let shards = paths.iter().map(|path| DB::open(path, db_size)).collect();
-        Some(Self { shards })
+        let (db, common_tokens, mmap) = DB::open(path, db_size);
+        Some(Self { db, common_tokens, mmap })
     }
 
     pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
-        self.shards
-            .iter()
-            .flat_map(|shard| shard.0.search::<I>(q, stats, &shard.1, &shard.2))
-            .collect()
-    }
-
-    pub fn get_shard(&self, idx: usize) -> Option<&DB<D>> {
-        self.shards.get(idx).map(|shard| &shard.0)
+        self.db.search::<I>(q, stats, &self.common_tokens, &self.mmap)
     }
 
     // pub fn foo(&self, q: &str)
@@ -59,21 +54,4 @@ where
     //             shard.get_documents_by_ids(shard.search(q))
     //         });
     // }
-}
-
-impl<D> Searcher<D>
-where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive
-        + Send
-        + Sync
-        + 'static,
-{
-    pub fn par_search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
-        self.shards
-            .par_iter()
-            .map(|shard| shard.0.search::<I>(q, stats, &shard.1, &shard.2))
-            .flatten()
-            .collect()
-    }
 }
