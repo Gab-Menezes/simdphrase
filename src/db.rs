@@ -440,6 +440,10 @@ where
                 packed_kind = packed_kind.concat(next_to_merge_kind);
             }
 
+            if to_merge.token.len() > 511 {
+                continue;
+            }
+
             let (doc_id_groups, values) = packed_kind.as_bytes();
             let offset = unsafe {
                 let (begin, doc_id_group_len) =
