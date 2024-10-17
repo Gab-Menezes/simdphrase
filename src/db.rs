@@ -38,10 +38,9 @@ use crate::{
 mod db_constants {
     pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
     pub const DB_TOKEN_TO_OFFSETS: &'static str = "token_to_offsets";
-    pub const DB_TOKEN_TO_PACKED: &'static str = "token_to_packed";
     pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
-    pub const ROARINGISH_PACKED_FILE: &'static str = "roaringish_packed";
-    pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "token_to_packed";
+    pub const FILE_ROARINGISH_PACKED: &'static str = "roaringish_packed";
+    pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "tmp_token_to_packed";
 }
 
 #[derive(Default)]
@@ -276,35 +275,6 @@ where
                 .unwrap(),
         ));
         rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&token_to_packed, file).unwrap();
-
-        // let mut token_to_token_id: Vec<_> = token_to_token_id.into_iter().collect();
-        // token_to_token_id.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
-
-        // for (token, token_id) in token_to_token_id.into_iter() {
-        //     if token.len() > 511 {
-        //         continue;
-        //     }
-
-        //     let packed = &token_id_to_roaringish_packed[*token_id as usize];
-
-        //     let Ok(achived_packed) = self.db_token_to_packed.get(rwtxn, token) else {
-        //         continue;
-        //     };
-
-        //     *mmap_size += packed.size_bytes();
-
-        //     match achived_packed {
-        //         Some(achived_packed) => {
-        //             let packed = achived_packed.concat(packed);
-        //             self.db_token_to_packed.put(rwtxn, token, &packed).unwrap()
-        //         }
-        //         None => {
-        //             // padding
-        //             *mmap_size += 64 + 16;
-        //             self.db_token_to_packed.put(rwtxn, token, packed).unwrap()
-        //         }
-        //     }
-        // }
     }
 
     pub(crate) fn generate_mmap_file(
@@ -338,7 +308,7 @@ where
             .truncate(true)
             .read(true)
             .write(true)
-            .open(self.env.path().join(db_constants::ROARINGISH_PACKED_FILE))
+            .open(self.env.path().join(db_constants::FILE_ROARINGISH_PACKED))
             .unwrap();
         file.set_len(mmap_size as u64 + (number_of_distinct_tokens * (64 + 16)))
             .unwrap();
@@ -514,7 +484,7 @@ where
 
         rotxn.commit().unwrap();
 
-        let mmap_file = File::open(path.join(db_constants::ROARINGISH_PACKED_FILE)).unwrap();
+        let mmap_file = File::open(path.join(db_constants::FILE_ROARINGISH_PACKED)).unwrap();
         let mmap = unsafe { Mmap::map(&mmap_file).unwrap() };
 
         (

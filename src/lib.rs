@@ -22,6 +22,7 @@ mod roaringish;
 mod searcher;
 mod utils;
 mod allocator;
+mod decreasing_window_iter;
 
 pub use db::{Stats, DB};
 pub use indexer::CommonTokens;

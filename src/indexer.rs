@@ -10,6 +10,7 @@ use rkyv::{
 
 use crate::{
     db::DB,
+    decreasing_window_iter::DecreasingWindows,
     roaringish::{RoaringishPacked, MAX_VALUE},
     utils::{normalize, tokenize, MAX_SEQ_LEN},
 };
@@ -117,9 +118,9 @@ where
                 );
 
                 token_id_to_positions
-                .entry(token_id)
-                .or_default()
-                .push((begin_pos + i) as u32);
+                    .entry(token_id)
+                    .or_default()
+                    .push((begin_pos + i) as u32);
             }
         }
     }
@@ -184,65 +185,123 @@ where
         tokenized_doc
     }
 
-    fn flush(&mut self, db: &DB<D>, rwtxn: &mut RwTxn, common_tokens: &HashSet<Box<str>>, mmap_size: &mut usize) {
+    fn flush(
+        &mut self,
+        db: &DB<D>,
+        rwtxn: &mut RwTxn,
+        common_tokens: &HashSet<Box<str>>,
+        mmap_size: &mut usize,
+    ) {
         if self.doc_ids.is_empty() {
             return;
         }
 
-        self.combine_common_tokens(common_tokens);
-        
+        self.merge_common_tokens(common_tokens);
+
         let token_to_token_id = std::mem::take(&mut self.token_to_token_id);
         let token_id_to_roaringish_packed = std::mem::take(&mut self.token_id_to_roaringish_packed);
 
-        db.write_token_to_roaringish_packed(token_to_token_id, token_id_to_roaringish_packed, mmap_size, self.batch_id);
+        db.write_token_to_roaringish_packed(
+            token_to_token_id,
+            token_id_to_roaringish_packed,
+            mmap_size,
+            self.batch_id,
+        );
         db.write_doc_id_to_document(rwtxn, &self.doc_ids, &self.documents);
 
         self.batch_id += 1;
         self.clear();
     }
 
-    fn combine_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
-        let mut sequence = Vec::new();
+    fn merge_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
+        let max_window_len = 3.try_into().unwrap();
         for (tokenized_doc, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
             let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
-            sequence.clear();
-            let mut begin_pos = 0;
-            for (pos, token_id) in tokenized_doc.iter().enumerate() {
-                let token = &self.token_id_to_token[*token_id as usize];
-                if common_tokens.contains(token.as_str()) {
-                    sequence.push(*token_id);
-                    continue;
+            let it = DecreasingWindows::new(tokenized_doc, max_window_len);
+            for (pos, token_ids) in it.enumerate() {
+                let token_id = token_ids[0];
+                let token = &self.token_id_to_token[token_id as usize];
+                let is_first_token_rare = !common_tokens.contains(token.as_str());
+                // if is_first_token_rare {
+                //     for i in 1..token_ids.len() {
+                //         let token_id = token_ids[i];
+                //         let token = &self.token_id_to_token[token_id as usize];
+                //         let is_token_rare = !common_tokens.contains(token.as_str());
+                //         if is_token_rare {
+                //             break;
+                //         }
+                //         let token: String = token_ids[..i]
+                //             .iter()
+                //             .map(|token_id| self.token_id_to_token[*token_id as usize].as_ref())
+                //             .intersperse(" ")
+                //             .collect();
+                //         let token_id = Self::get_token_id(
+                //             &token,
+                //             &mut self.token_to_token_id,
+                //             &mut self.token_id_to_token,
+                //             &mut self.token_id_to_roaringish_packed,
+                //             &mut self.next_token_id,
+                //         );
+                //         token_id_to_positions
+                //             .entry(token_id)
+                //             .or_default()
+                //             .push(pos as u32);
+                //     }
+                // } else {
+                //     for i in 1..token_ids.len() {
+                //         let token_id = token_ids[i];
+                //         let token = &self.token_id_to_token[token_id as usize];
+                //         let is_token_rare = !common_tokens.contains(token.as_str());
+                //         let token: String = token_ids[..i]
+                //             .iter()
+                //             .map(|token_id| self.token_id_to_token[*token_id as usize].as_ref())
+                //             .intersperse(" ")
+                //             .collect();
+                //         let token_id = Self::get_token_id(
+                //             &token,
+                //             &mut self.token_to_token_id,
+                //             &mut self.token_id_to_token,
+                //             &mut self.token_id_to_roaringish_packed,
+                //             &mut self.next_token_id,
+                //         );
+                //         token_id_to_positions
+                //             .entry(token_id)
+                //             .or_default()
+                //             .push(pos as u32);
+                //         if is_token_rare {
+                //             break;
+                //         }
+                //     }
+                // }
+
+                for i in 1..token_ids.len() {
+                    let token_id = token_ids[i];
+                    let token = &self.token_id_to_token[token_id as usize];
+                    let is_token_rare = !common_tokens.contains(token.as_str());
+                    if is_first_token_rare && is_token_rare {
+                        break;
+                    }
+                    let token: String = token_ids[..i]
+                        .iter()
+                        .map(|token_id| self.token_id_to_token[*token_id as usize].as_ref())
+                        .intersperse(" ")
+                        .collect();
+                    let token_id = Self::get_token_id(
+                        &token,
+                        &mut self.token_to_token_id,
+                        &mut self.token_id_to_token,
+                        &mut self.token_id_to_roaringish_packed,
+                        &mut self.next_token_id,
+                    );
+                    token_id_to_positions
+                        .entry(token_id)
+                        .or_default()
+                        .push(pos as u32);
+                    if is_token_rare {
+                        break;
+                    }
                 }
-
-                if sequence.len() <= 1 {
-                    sequence.clear();
-                    begin_pos = pos + 1;
-                    continue;
-                }
-
-                Self::analyze_common_tokens_sequence(
-                    &sequence,
-                    begin_pos,
-                    &mut token_id_to_positions,
-                    &mut self.token_to_token_id,
-                    &mut self.token_id_to_token,
-                    &mut self.token_id_to_roaringish_packed,
-                    &mut self.next_token_id,
-                );
-
-                sequence.clear();
-                begin_pos = pos + 1;
             }
-
-            Self::analyze_common_tokens_sequence(
-                &sequence,
-                begin_pos,
-                &mut token_id_to_positions,
-                &mut self.token_to_token_id,
-                &mut self.token_id_to_token,
-                &mut self.token_id_to_roaringish_packed,
-                &mut self.next_token_id,
-            );
 
             for (token_id, positions) in token_id_to_positions.iter() {
                 self.token_id_to_roaringish_packed[*token_id as usize].push(*doc_id, positions);
@@ -257,10 +316,7 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub fn new(
-        batch_size: Option<u32>,
-        common_tokens: Option<CommonTokens>,
-    ) -> Self {
+    pub fn new(batch_size: Option<u32>, common_tokens: Option<CommonTokens>) -> Self {
         Self {
             batch_size,
             common_tokens,
@@ -305,7 +361,6 @@ impl Indexer {
             + Archive
             + 'static,
     {
-
         let db = DB::truncate(&path, db_size);
         let mut rwtxn = db.env.write_txn().unwrap();
 
@@ -363,10 +418,14 @@ impl Indexer {
 
         db.write_common_tokens(&mut rwtxn, &common_tokens);
         b = std::time::Instant::now();
-        db.generate_mmap_file(number_of_distinct_tokens, mmap_size, batch.batch_id, &mut rwtxn);
+        db.generate_mmap_file(
+            number_of_distinct_tokens,
+            mmap_size,
+            batch.batch_id,
+            &mut rwtxn,
+        );
         println!("write mmap {}", b.elapsed().as_secs());
         rwtxn.commit().unwrap();
-
 
         next_doc_id
     }
