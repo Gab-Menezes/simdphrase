@@ -40,7 +40,7 @@ mod db_constants {
     pub const DB_TOKEN_TO_OFFSETS: &'static str = "token_to_offsets";
     pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
     pub const FILE_ROARINGISH_PACKED: &'static str = "roaringish_packed";
-    pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "tmp_token_to_packed";
+    pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "temp_token_to_packed";
 }
 
 #[derive(Default)]
@@ -505,6 +505,7 @@ where
         tokens: &[&str],
         common_tokens: &HashSet<Box<str>>,
     ) -> Vec<(String, u32)> {
+        // TODO: Fix
         let mut final_tokens = Vec::with_capacity(tokens.len());
         let mut sequence = Vec::with_capacity(tokens.len());
         for token in tokens.iter() {
