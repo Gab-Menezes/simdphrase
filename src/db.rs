@@ -533,6 +533,10 @@ where
         assert!(r.is_empty());
 
         let values_offset = unsafe { mmap.as_ptr().add(end).align_offset(16) };
+
+        let offset_advise = begin;
+        let len_advise = offset.doc_id_group_len.to_native() as usize + values_offset + offset.values_len.to_native() as usize;
+
         if end + values_offset >= mmap.len() {
             return None;
         }
@@ -541,6 +545,8 @@ where
         let (l, values, r) = unsafe { &mmap[begin..end].align_to::<u16>() };
         assert!(l.is_empty());
         assert!(r.is_empty());
+
+        mmap.advise_range(memmap2::Advice::Sequential, offset_advise, len_advise).unwrap();
 
         Some(AlignedBorrowRoaringishPacked::new_raw(
             doc_id_groups,
