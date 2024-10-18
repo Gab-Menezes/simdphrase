@@ -25,14 +25,9 @@ use rkyv::{
 };
 
 use crate::{
-    codecs::{NativeU32, ZeroCopyCodec},
-    normalize,
-    roaringish::{
+    codecs::{NativeU32, ZeroCopyCodec}, decreasing_window_iter::DecreasingWindows, normalize, roaringish::{
         intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind,
-    },
-    tokenize,
-    utils::MAX_SEQ_LEN,
-    AlignedBorrowRoaringishPacked,
+    }, tokenize, utils::MAX_SEQ_LEN, AlignedBorrowRoaringishPacked
 };
 
 mod db_constants {
@@ -500,45 +495,25 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn merge_tokens(
+    pub(crate) fn merge_common_tokens(
         &self,
         tokens: &[&str],
         common_tokens: &HashSet<Box<str>>,
     ) -> Vec<(String, u32)> {
-        // TODO: Fix
         let mut final_tokens = Vec::with_capacity(tokens.len());
-        let mut sequence = Vec::with_capacity(tokens.len());
-        for token in tokens.iter() {
-            if common_tokens.contains(*token) {
-                sequence.push(*token);
-                continue;
+        let max_window_len = 3.try_into().unwrap();
+        let mut it = DecreasingWindows::new(tokens, max_window_len);
+        while let Some(tokens) = it.next() {
+            let mut i = tokens[1..].iter().take_while(|t| common_tokens.contains(**t)).count();
+            if common_tokens.contains(tokens[0]) {
+                i += 1;
             }
-
-            if sequence.len() <= 1 {
-                final_tokens.extend(sequence.iter().map(|t| (t.to_string(), 1)));
-                final_tokens.push((token.to_string(), 1));
-                sequence.clear();
-                continue;
+            let token: String = tokens[..i + 1].iter().copied().intersperse(" ").collect();
+            final_tokens.push((token, i as u32 + 1));
+            for _ in 0..i {
+                let _ = it.next();
             }
-
-            for chunk in sequence.chunks(MAX_SEQ_LEN) {
-                let token: String = chunk.iter().copied().intersperse(" ").collect();
-                final_tokens.push((token, chunk.len() as u32));
-            }
-
-            final_tokens.push((token.to_string(), 1));
-            sequence.clear();
         }
-
-        if sequence.len() > 1 {
-            for chunk in sequence.chunks(MAX_SEQ_LEN) {
-                let token: String = chunk.iter().copied().intersperse(" ").collect();
-                final_tokens.push((token, chunk.len() as u32));
-            }
-        } else {
-            final_tokens.extend(sequence.iter().map(|t| (t.to_string(), 1)));
-        }
-
         final_tokens
     }
 
@@ -600,7 +575,7 @@ where
         }
 
         let b = std::time::Instant::now();
-        let final_tokens = self.merge_tokens(&tokens, common_tokens);
+        let final_tokens = self.merge_common_tokens(&tokens, common_tokens);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
