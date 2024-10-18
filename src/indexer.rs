@@ -281,7 +281,7 @@ where
                     if is_first_token_rare && is_token_rare {
                         break;
                     }
-                    let token: String = token_ids[..i]
+                    let token: String = token_ids[..i + 1]
                         .iter()
                         .map(|token_id| self.token_id_to_token[*token_id as usize].as_ref())
                         .intersperse(" ")

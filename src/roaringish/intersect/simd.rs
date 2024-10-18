@@ -355,7 +355,11 @@ impl Intersect for SimdIntersect {
         let end_rhs = rhs.doc_id_groups.len() / N * N;
         let a = unsafe { lhs.doc_id_groups.get_unchecked(..end_lhs) };
         let b = unsafe { rhs.doc_id_groups.get_unchecked(..end_rhs) };
-        let a_values = unsafe { lhs.values.get_unchecked(..end_lhs) };
+        let a_values = if FIRST {
+            unsafe { lhs.values.get_unchecked(..end_lhs) }
+        } else {
+            &lhs.values
+        };
         let b_values = unsafe { rhs.values.get_unchecked(..end_rhs) };
         let mut need_to_analyze_msb = false;
         unsafe {
