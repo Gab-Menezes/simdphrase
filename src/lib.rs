@@ -25,7 +25,6 @@ mod allocator;
 mod decreasing_window_iter;
 
 pub use db::{Stats, DB};
-pub use indexer::CommonTokens;
 pub use indexer::Indexer;
 pub use roaringish::intersect::naive;
 pub use roaringish::intersect::simd;
