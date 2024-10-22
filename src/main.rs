@@ -98,6 +98,7 @@ where
         let stats = Stats::default();
         for _ in 0..20 {
             let doc_ids = searcher.search::<Intersect>(q, &stats);
+            std::hint::black_box(doc_ids);
         }
 
         let stats = Stats::default();
@@ -110,6 +111,7 @@ where
             //     .unwrap();
 
             let doc_ids = searcher.search::<Intersect>(q, &stats);
+            std::hint::black_box(doc_ids);
         }
         let e = b.elapsed().as_micros();
         let avg_ms = e as f64 / args.runs as f64 / 1000_f64;
