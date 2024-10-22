@@ -178,7 +178,6 @@ impl<'a> RoaringishPackedKind<'a> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
 pub struct AlignedRoaringishPacked {
     pub(crate) doc_id_groups: Vec<u64, Aligned64>,
     pub(crate) values: Vec<u16, Aligned64>,
@@ -410,15 +409,52 @@ impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
 
         let mask = u16::MAX << rhs;
         let bits_to_check = !mask;
-        for (doc_id_group, packed_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
+
+
+        let mut it = self.doc_id_groups.iter().zip(self.values.iter());
+        let Some((doc_id_group, packed_values)) = it.next() else {
+            return AlignedRoaringishPacked::default();
+        };
+
+        let new_values = packed_values.rotate_left(rhs);
+        let postions_current_group = new_values & mask;
+        let postions_new_group = new_values & bits_to_check;
+        let mut highest_doc_id_group = 0;
+        if postions_current_group > 0 {
+            unsafe {
+                doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
+                values.get_unchecked_mut(i).write(postions_current_group);
+                i += 1;
+            }
+            highest_doc_id_group = *doc_id_group;
+        }
+        if postions_new_group > 0 {
+            unsafe {
+                doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + 1);
+                values.get_unchecked_mut(i).write(postions_new_group);
+                i += 1;
+            }
+            highest_doc_id_group = *doc_id_group + 1;
+        }
+        assert!(i > 0);
+
+        for (doc_id_group, packed_values) in it {
             let new_values = packed_values.rotate_left(rhs);
             let postions_current_group = new_values & mask;
             let postions_new_group = new_values & bits_to_check;
             if postions_current_group > 0 {
-                unsafe {
-                    doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
-                    values.get_unchecked_mut(i).write(postions_current_group);
-                    i += 1;
+                if *doc_id_group > highest_doc_id_group {
+                    unsafe {
+                        doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
+                        values.get_unchecked_mut(i).write(postions_current_group);
+                        i += 1;
+                        highest_doc_id_group = *doc_id_group;
+                    }
+                } else {
+                    unsafe {
+                        let r_values = values.get_unchecked_mut(i - 1).assume_init_mut();
+                        *r_values |= postions_current_group;
+                    }
                 }
             }
             if postions_new_group > 0 {
@@ -426,6 +462,7 @@ impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
                     doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + 1);
                     values.get_unchecked_mut(i).write(postions_new_group);
                     i += 1;
+                    highest_doc_id_group = *doc_id_group + 1;
                 }
             }
         }
@@ -449,7 +486,7 @@ impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
     }
 }
 
-impl Binary for RoaringishPacked {
+impl Binary for AlignedRoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut list = f.debug_list();
         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
@@ -466,7 +503,24 @@ impl Binary for RoaringishPacked {
     }
 }
 
-// impl Debug for RoaringishPacked {
+impl<'a> Binary for AlignedBorrowRoaringishPacked<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut list = f.debug_list();
+        for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
+            list.entry_with(|f| {
+                let doc_id = get_doc_id(*doc_id_group);
+                let group = get_group_from_doc_id_group(*doc_id_group);
+                f.write_fmt(format_args!(
+                    "{doc_id:032b} {group:016b} {encoded_values:016b}"
+                ))
+            });
+        }
+
+        list.finish()
+    }
+}
+
+// impl Debug for AlignedRoaringishPacked {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 //         let mut list = f.debug_list();
 //         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
@@ -491,7 +545,23 @@ impl Binary for RoaringishPacked {
 //     }
 // }
 
-impl Display for RoaringishPacked {
+impl Display for AlignedRoaringishPacked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let it = self.doc_id_groups.iter().zip(self.values.iter()).flat_map(
+            |(doc_id_group, encoded_values)| {
+                let doc_id = get_doc_id(*doc_id_group);
+                let group = get_group_from_doc_id_group(*doc_id_group);
+                let s = group * 16;
+                (0..16u32)
+                    .filter_map(move |i| ((encoded_values >> i) & 1 == 1).then_some(i))
+                    .map(move |i| (doc_id, s + i))
+            },
+        );
+        f.debug_list().entries(it).finish()
+    }
+}
+
+impl<'a> Display for AlignedBorrowRoaringishPacked<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let it = self.doc_id_groups.iter().zip(self.values.iter()).flat_map(
             |(doc_id_group, encoded_values)| {

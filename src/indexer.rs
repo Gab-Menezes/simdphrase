@@ -86,52 +86,16 @@ where
         self.tokenized_docs.push(tokenized_doc);
     }
 
-    fn analyze_common_tokens_sequence(
-        sequence: &[u32],
-        begin_pos: usize,
-        token_id_to_positions: &mut FxHashMap<u32, Vec<u32>>,
-        token_to_token_id: &mut AHashMap<Box<str>, u32>,
-        token_id_to_token: &mut Vec<Box<str>>,
-        token_id_to_roaringish_packed: &mut Vec<RoaringishPacked>,
-        next_token_id: &mut u32,
-    ) {
-        if sequence.len() <= 1 {
-            return;
-        }
-        for i in 0..(sequence.len() - 1) {
-            let b = i + 2;
-            let e = (sequence.len() + 1).min(i + MAX_SEQ_LEN + 1);
-            for j in b..e {
-                let token: String = sequence[i..j]
-                    .iter()
-                    .map(|token_id| token_id_to_token[*token_id as usize].as_ref())
-                    .intersperse(" ")
-                    .collect();
-
-                let token = token.as_str();
-                let token_id = Self::get_token_id(
-                    token,
-                    token_to_token_id,
-                    token_id_to_token,
-                    token_id_to_roaringish_packed,
-                    next_token_id,
-                );
-
-                token_id_to_positions
-                    .entry(token_id)
-                    .or_default()
-                    .push((begin_pos + i) as u32);
-            }
-        }
-    }
-
     fn get_token_id(
         token: &str,
+        hllp_tokens: &mut HyperLogLogPlus<Box<str>, ahash::RandomState>,
         token_to_token_id: &mut AHashMap<Box<str>, u32>,
         token_id_to_token: &mut Vec<Box<str>>,
         token_id_to_roaringish_packed: &mut Vec<RoaringishPacked>,
         next_token_id: &mut u32,
     ) -> u32 {
+        hllp_tokens.insert(token);
+
         let (_, token_id) = token_to_token_id
             .raw_entry_mut()
             .from_key(token)
@@ -163,6 +127,7 @@ where
 
             let token_id = Self::get_token_id(
                 token,
+                &mut self.hllp_tokens,
                 &mut self.token_to_token_id,
                 &mut self.token_id_to_token,
                 &mut self.token_id_to_roaringish_packed,
@@ -288,6 +253,7 @@ where
                         .collect();
                     let token_id = Self::get_token_id(
                         &token,
+                        &mut self.hllp_tokens,
                         &mut self.token_to_token_id,
                         &mut self.token_id_to_token,
                         &mut self.token_id_to_roaringish_packed,
