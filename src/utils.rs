@@ -1,7 +1,5 @@
 use unicode_segmentation::UnicodeSegmentation;
 
-pub const MAX_SEQ_LEN: usize = 5;
-
 pub fn normalize(s: &str) -> String {
     s.trim_start().trim_end().to_lowercase()
 }

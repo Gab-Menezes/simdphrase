@@ -17,7 +17,6 @@ where
         + Archive,
 {
     db: DB<D>,
-    common_tokens: HashSet<Box<str>>,
     mmap: Mmap,
 }
 
@@ -35,12 +34,12 @@ where
         let mut paths = paths?;
         paths.sort_unstable();
 
-        let (db, common_tokens, mmap) = DB::open(path, db_size);
-        Some(Self { db, common_tokens, mmap })
+        let (db, mmap) = DB::open(path, db_size);
+        Some(Self { db, mmap })
     }
 
     pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
-        self.db.search::<I>(q, stats, &self.common_tokens, &self.mmap)
+        self.db.search::<I>(q, stats, &self.mmap)
     }
 
     // pub fn foo(&self, q: &str)

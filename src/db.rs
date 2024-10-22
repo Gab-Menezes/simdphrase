@@ -1,11 +1,5 @@
 use std::{
-    cmp::Reverse,
-    collections::{BTreeSet, BinaryHeap, HashSet},
-    fmt::Debug,
-    fs::File,
-    io::BufWriter,
-    path::Path,
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    cmp::Reverse, collections::{BTreeSet, BinaryHeap, HashSet}, fmt::Debug, fs::File, io::BufWriter, num::NonZero, path::Path, sync::atomic::{AtomicU64, Ordering::Relaxed}
 };
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
@@ -27,13 +21,14 @@ use rkyv::{
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec}, decreasing_window_iter::DecreasingWindows, normalize, roaringish::{
         intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind,
-    }, tokenize, utils::MAX_SEQ_LEN, AlignedBorrowRoaringishPacked
+    }, tokenize, AlignedBorrowRoaringishPacked
 };
+
+pub const N_GRAM_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
 
 mod db_constants {
     pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
     pub const DB_TOKEN_TO_OFFSETS: &'static str = "token_to_offsets";
-    pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
     pub const FILE_ROARINGISH_PACKED: &'static str = "roaringish_packed";
     pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "temp_token_to_packed";
 }
@@ -427,27 +422,7 @@ where
         }
     }
 
-    fn read_common_tokens(
-        rotxn: &RoTxn,
-        db_main: Database<Unspecified, Unspecified>,
-    ) -> HashSet<Box<str>> {
-        let k = db_main
-            .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
-            .get(rotxn, db_constants::KEY_COMMON_TOKENS)
-            .unwrap()
-            .unwrap();
-
-        deserialize::<_, rkyv::rancor::Error>(k).unwrap()
-    }
-
-    pub(crate) fn write_common_tokens(&self, rwtxn: &mut RwTxn, common_tokens: &HashSet<Box<str>>) {
-        self.db_main
-            .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
-            .put(rwtxn, db_constants::KEY_COMMON_TOKENS, common_tokens)
-            .unwrap();
-    }
-
-    pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<Box<str>>, Mmap) {
+    pub fn open(path: &Path, db_size: usize) -> (Self, Mmap) {
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)
@@ -475,8 +450,6 @@ where
             .unwrap()
             .unwrap();
 
-        let common_tokens = Self::read_common_tokens(&rotxn, db_main);
-
         rotxn.commit().unwrap();
 
         let mmap_file = File::open(path.join(db_constants::FILE_ROARINGISH_PACKED)).unwrap();
@@ -489,33 +462,33 @@ where
                 db_doc_id_to_document,
                 db_token_to_offsets,
             },
-            common_tokens,
             mmap,
         )
     }
 
     #[inline(always)]
-    pub(crate) fn merge_common_tokens(
+    pub(crate) fn merge_tokens(
         &self,
         tokens: &[&str],
-        common_tokens: &HashSet<Box<str>>,
     ) -> Vec<(String, u32)> {
-        let mut final_tokens = Vec::with_capacity(tokens.len());
-        let max_window_len = 3.try_into().unwrap();
-        let mut it = DecreasingWindows::new(tokens, max_window_len);
-        while let Some(tokens) = it.next() {
-            let mut i = tokens[1..].iter().take_while(|t| common_tokens.contains(**t)).count();
-            if common_tokens.contains(tokens[0]) {
-                i += 1;
-            }
-            let len = (i + 1).min(tokens.len());
-            let token: String = tokens[..len].iter().copied().intersperse(" ").collect();
-            final_tokens.push((token, len as u32));
-            for _ in 0..(len - 1) {
-                let _ = it.next();
-            }
-        }
-        final_tokens
+        todo!()
+
+        // let mut final_tokens = Vec::with_capacity(tokens.len());
+        // let max_window_len = 3.try_into().unwrap();
+        // let mut it = DecreasingWindows::new(tokens, max_window_len);
+        // while let Some(tokens) = it.next() {
+        //     let mut i = tokens[1..].iter().take_while(|t| common_tokens.contains(**t)).count();
+        //     if common_tokens.contains(tokens[0]) {
+        //         i += 1;
+        //     }
+        //     let len = (i + 1).min(tokens.len());
+        //     let token: String = tokens[..len].iter().copied().intersperse(" ").collect();
+        //     final_tokens.push((token, len as u32));
+        //     for _ in 0..(len - 1) {
+        //         let _ = it.next();
+        //     }
+        // }
+        // final_tokens
     }
 
     #[inline(always)]
@@ -559,7 +532,6 @@ where
         &self,
         q: &str,
         stats: &Stats,
-        common_tokens: &HashSet<Box<str>>,
         mmap: &Mmap,
     ) -> Vec<u32> {
         let b = std::time::Instant::now();
@@ -582,7 +554,7 @@ where
         }
 
         let b = std::time::Instant::now();
-        let final_tokens = self.merge_common_tokens(&tokens, common_tokens);
+        let final_tokens = self.merge_tokens(&tokens);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
