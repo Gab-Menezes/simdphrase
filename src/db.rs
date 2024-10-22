@@ -508,9 +508,10 @@ where
             if common_tokens.contains(tokens[0]) {
                 i += 1;
             }
-            let token: String = tokens[..i + 1].iter().copied().intersperse(" ").collect();
-            final_tokens.push((token, i as u32 + 1));
-            for _ in 0..i {
+            let len = (i + 1).min(tokens.len());
+            let token: String = tokens[..len].iter().copied().intersperse(" ").collect();
+            final_tokens.push((token, len as u32));
+            for _ in 0..(len - 1) {
                 let _ = it.next();
             }
         }
