@@ -31,9 +31,9 @@
 
                 "search",
                 "1",
-                "./queries5.txt",
+                "./queries.txt",
                 "./msmarco-50",
-                "8589934592",
+                "17179869184",
                 "ms-marco"
             ],
             "cwd": "${workspaceFolder}"
