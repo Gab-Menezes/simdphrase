@@ -145,12 +145,9 @@ where
             return;
         }
 
-        let token_to_token_id = std::mem::take(&mut self.token_to_token_id);
-        let token_id_to_roaringish_packed = std::mem::take(&mut self.token_id_to_roaringish_packed);
-
         db.write_token_to_roaringish_packed(
-            token_to_token_id,
-            token_id_to_roaringish_packed,
+            &self.token_to_token_id,
+            &self.token_id_to_roaringish_packed,
             mmap_size,
             self.batch_id,
         );

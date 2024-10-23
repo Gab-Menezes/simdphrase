@@ -10,21 +10,21 @@ use heed::{
 };
 use memmap2::{Mmap, MmapMut};
 use rkyv::{
-    api::high::HighSerializer,
-    boxed::ArchivedBox,
-    deserialize,
-    ser::{allocator::ArenaHandle, writer::IoWriter},
-    util::AlignedVec,
-    Archive, Archived, Deserialize, Serialize,
+    api::high::HighSerializer, boxed::{ArchivedBox, BoxResolver}, deserialize, rancor::Fallible, ser::{allocator::ArenaHandle, writer::IoWriter, Allocator, Serializer, Writer}, tuple::{ArchivedTuple2, ArchivedTuple3}, util::AlignedVec, vec::{ArchivedVec, VecResolver}, with::Inline, Archive, Archived, Deserialize, Place, Serialize
 };
 
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec}, decreasing_window_iter::DecreasingWindows, normalize, roaringish::{
-        intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind,
+        intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind, RoaringishPackedResolver,
     }, tokenize, AlignedBorrowRoaringishPacked
 };
 
 pub const N_GRAM_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
+
+#[derive(Archive, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct BorrowBoxStr<'a>(#[rkyv(with = Inline)] &'a Box<str>);
+#[derive(Archive, Serialize)]
+struct BorrowRoaringishPacked<'a>(#[rkyv(with = Inline)] &'a RoaringishPacked);
 
 mod db_constants {
     pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
@@ -160,7 +160,6 @@ where
         + Archive,
 {
     pub(crate) env: Env,
-    db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
     db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
 }
@@ -200,8 +199,6 @@ where
 
         let mut wrtxn = env.write_txn().unwrap();
 
-        let db_main = env.create_database(&mut wrtxn, None).unwrap();
-
         let db_doc_id_to_document = env
             .database_options()
             .types::<NativeU32, ZeroCopyCodec<D>>()
@@ -218,7 +215,6 @@ where
 
         Self {
             env,
-            db_main,
             db_doc_id_to_document,
             db_token_to_offsets,
         }
@@ -239,17 +235,17 @@ where
 
     pub(crate) fn write_token_to_roaringish_packed(
         &self,
-        token_to_token_id: AHashMap<Box<str>, u32>,
-        mut token_id_to_roaringish_packed: Vec<RoaringishPacked>,
+        token_to_token_id: &AHashMap<Box<str>, u32>,
+        token_id_to_roaringish_packed: &[RoaringishPacked],
         mmap_size: &mut usize,
         batch_id: u32,
     ) {
         let mut token_to_packed: Vec<_> = token_to_token_id
             .into_iter()
             .map(|(token, token_id)| {
-                let packed = std::mem::take(&mut token_id_to_roaringish_packed[token_id as usize]);
+                let packed = &token_id_to_roaringish_packed[*token_id as usize];
                 *mmap_size += packed.size_bytes();
-                (token, packed)
+                (BorrowBoxStr(token), BorrowRoaringishPacked(packed))
             })
             .collect();
         token_to_packed.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
@@ -434,8 +430,6 @@ where
 
         let rotxn = env.read_txn().unwrap();
 
-        let db_main = env.open_database(&rotxn, None).unwrap().unwrap();
-
         let db_doc_id_to_document = env
             .database_options()
             .types::<NativeU32, ZeroCopyCodec<D>>()
@@ -458,7 +452,6 @@ where
         (
             Self {
                 env,
-                db_main,
                 db_doc_id_to_document,
                 db_token_to_offsets,
             },
