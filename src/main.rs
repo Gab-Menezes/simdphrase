@@ -11,7 +11,7 @@ use ahash::AHashSet;
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hyperloglogplus::HyperLogLog;
-use phrase_search::{naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, Indexer, Searcher, Stats};
+use phrase_search::{naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, CommonTokens, Indexer, Searcher, Stats};
 use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
@@ -212,7 +212,7 @@ fn index_msmarco(args: IndexFile) {
     });
 
     let b = std::time::Instant::now();
-    let indexer = Indexer::new(Some(200000));
+    let indexer = Indexer::new(Some(30000), Some(CommonTokens::FixedNum(50)));
     let num_docs = indexer.index(it, &args.index_name, args.db_size);
     println!(
         "Whole Indexing took {:?} ({num_docs} documents)",

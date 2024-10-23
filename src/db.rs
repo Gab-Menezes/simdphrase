@@ -19,8 +19,6 @@ use crate::{
     }, tokenize, AlignedBorrowRoaringishPacked
 };
 
-pub const N_GRAM_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
-
 #[derive(Archive, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct BorrowBoxStr<'a>(#[rkyv(with = Inline)] &'a Box<str>);
 #[derive(Archive, Serialize)]
@@ -29,6 +27,7 @@ struct BorrowRoaringishPacked<'a>(#[rkyv(with = Inline)] &'a RoaringishPacked);
 mod db_constants {
     pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
     pub const DB_TOKEN_TO_OFFSETS: &'static str = "token_to_offsets";
+    pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
     pub const FILE_ROARINGISH_PACKED: &'static str = "roaringish_packed";
     pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "temp_token_to_packed";
 }
@@ -160,6 +159,7 @@ where
         + Archive,
 {
     pub(crate) env: Env,
+    db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
     db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
 }
@@ -199,6 +199,8 @@ where
 
         let mut wrtxn = env.write_txn().unwrap();
 
+        let db_main = env.create_database(&mut wrtxn, None).unwrap();
+
         let db_doc_id_to_document = env
             .database_options()
             .types::<NativeU32, ZeroCopyCodec<D>>()
@@ -215,6 +217,7 @@ where
 
         Self {
             env,
+            db_main,
             db_doc_id_to_document,
             db_token_to_offsets,
         }
@@ -418,7 +421,27 @@ where
         }
     }
 
-    pub fn open(path: &Path, db_size: usize) -> (Self, Mmap) {
+    fn read_common_tokens(
+        rotxn: &RoTxn,
+        db_main: Database<Unspecified, Unspecified>,
+    ) -> HashSet<Box<str>> {
+        let k = db_main
+            .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
+            .get(rotxn, db_constants::KEY_COMMON_TOKENS)
+            .unwrap()
+            .unwrap();
+
+        deserialize::<_, rkyv::rancor::Error>(k).unwrap()
+    }
+
+    pub(crate) fn write_common_tokens(&self, rwtxn: &mut RwTxn, common_tokens: &HashSet<Box<str>>) {
+        self.db_main
+            .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
+            .put(rwtxn, db_constants::KEY_COMMON_TOKENS, common_tokens)
+            .unwrap();
+    }
+
+    pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<Box<str>>, Mmap) {
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)
@@ -429,6 +452,8 @@ where
         };
 
         let rotxn = env.read_txn().unwrap();
+
+        let db_main = env.open_database(&rotxn, None).unwrap().unwrap();
 
         let db_doc_id_to_document = env
             .database_options()
@@ -444,6 +469,8 @@ where
             .unwrap()
             .unwrap();
 
+        let common_tokens = Self::read_common_tokens(&rotxn, db_main);
+
         rotxn.commit().unwrap();
 
         let mmap_file = File::open(path.join(db_constants::FILE_ROARINGISH_PACKED)).unwrap();
@@ -452,9 +479,11 @@ where
         (
             Self {
                 env,
+                db_main,
                 db_doc_id_to_document,
                 db_token_to_offsets,
             },
+            common_tokens,
             mmap,
         )
     }
@@ -525,6 +554,7 @@ where
         &self,
         q: &str,
         stats: &Stats,
+        common_tokens: &HashSet<Box<str>>,
         mmap: &Mmap,
     ) -> Vec<u32> {
         let b = std::time::Instant::now();
