@@ -192,6 +192,7 @@ impl Default for AlignedRoaringishPacked {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct AlignedBorrowRoaringishPacked<'a> {
     pub(crate) doc_id_groups: &'a [u64],
     pub(crate) values: &'a [u16],
@@ -259,12 +260,39 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
     }
 
     pub fn intersect<I: Intersect>(
-        &self,
-        rhs: &Self,
+        self,
+        mut rhs: Self,
         rhs_len: u32,
         stats: &Stats,
     ) -> AlignedRoaringishPacked {
-        let lhs = self;
+        let mut lhs = self;
+
+        if lhs.doc_id_groups.is_empty() || rhs.doc_id_groups.is_empty() {
+            return AlignedRoaringishPacked::default();
+        }
+
+        let b = std::time::Instant::now();
+        let first_lhs = lhs.doc_id_groups[0];
+        let first_rhs = rhs.doc_id_groups[0];
+
+        if first_lhs < first_rhs {
+            let i = match rhs.doc_id_groups.binary_search(&first_lhs) {
+                Ok(i) => i,
+                Err(i) => i,
+            };
+            let aligned_i = i/8 * 8;
+            rhs = AlignedBorrowRoaringishPacked::new_raw(&rhs.doc_id_groups[aligned_i..], &rhs.values[aligned_i..]);
+        } else if first_lhs > first_rhs {
+            let i = match lhs.doc_id_groups.binary_search(&first_rhs) {
+                Ok(i) => i,
+                Err(i) => i,
+            };
+            let aligned_i = i/8 * 8;
+            lhs = AlignedBorrowRoaringishPacked::new_raw(&lhs.doc_id_groups[aligned_i..], &lhs.values[aligned_i..]);
+        }
+        stats
+        .binary_search
+        .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
         let (doc_id_groups, values_intersect, msb_doc_id_groups) = I::intersect::<true>(&lhs, &rhs);

@@ -60,7 +60,7 @@ pub const MAX_WINDOW_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
 pub struct Stats {
     pub normalize_tokenize: AtomicU64,
     pub merge: AtomicU64,
-    pub get_pls: AtomicU64,
+    pub binary_search: AtomicU64,
     pub first_intersect: AtomicU64,
     pub second_intersect: AtomicU64,
     pub first_result: AtomicU64,
@@ -73,6 +73,7 @@ impl Debug for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sum = self.normalize_tokenize.load(Relaxed)
             + self.merge.load(Relaxed)
+            + self.binary_search.load(Relaxed)
             + self.first_intersect.load(Relaxed)
             + self.second_intersect.load(Relaxed)
             + self.first_result.load(Relaxed)
@@ -80,89 +81,77 @@ impl Debug for Stats {
             + self.add_lhs.load(Relaxed)
             + self.add_rhs.load(Relaxed);
 
-        let sum_pl = sum + self.get_pls.load(Relaxed);
-
-        let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64;
-        let merge = self.merge.load(Relaxed) as f64 / sum as f64;
-        // let get_pls = self.get_pls.load(Relaxed) as f64 / sum as f64;
-        let first_gallop = self.first_intersect.load(Relaxed) as f64 / sum as f64;
-        let second_gallop = self.second_intersect.load(Relaxed) as f64 / sum as f64;
-        let first_result = self.first_result.load(Relaxed) as f64 / sum as f64;
-        let second_result = self.second_result.load(Relaxed) as f64 / sum as f64;
-        let add_lhs = self.add_lhs.load(Relaxed) as f64 / sum as f64;
-        let add_rhs = self.add_rhs.load(Relaxed) as f64 / sum as f64;
-
-        let pl_normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_merge = self.merge.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_get_pls = self.get_pls.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_first_gallop = self.first_intersect.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_second_gallop = self.second_intersect.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_first_result = self.first_result.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_second_result = self.second_result.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_add_lhs = self.add_lhs.load(Relaxed) as f64 / sum_pl as f64;
-        let pl_add_rhs = self.add_rhs.load(Relaxed) as f64 / sum_pl as f64;
+        let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let merge = self.merge.load(Relaxed) as f64 / sum as f64  * 100f64;
+        let binary_search = self.binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let first_result = self.first_result.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let second_result = self.second_result.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let add_lhs = self.add_lhs.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let add_rhs = self.add_rhs.load(Relaxed) as f64 / sum as f64 * 100f64;
 
         f.debug_struct("Stats")
             .field(
                 "normalize_tokenize",
                 &format_args!(
-                    "({:.3}ms, {normalize_tokenize:.3}%, {pl_normalize_tokenize:.3}%)",
+                    "({:.3}ms, {normalize_tokenize:.3}%)",
                     self.normalize_tokenize.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
                 "merge",
                 &format_args!(
-                    "({:.3}ms, {merge:.3}%, {pl_merge:.3}%)",
+                    "({:.3}ms, {merge:.3}%)",
                     self.merge.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
-                "get_pls",
+                "binary_search",
                 &format_args!(
-                    "({:.3}ms, _%, {pl_get_pls:.3}%)",
-                    self.get_pls.load(Relaxed) as f64 / 1000f64
+                    "({:.3}ms, {binary_search:.3}%)",
+                    self.binary_search.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
                 "first_intersect",
                 &format_args!(
-                    "({:.3}ms, {first_gallop:.3}%, {pl_first_gallop:.3}%)",
+                    "({:.3}ms, {first_intersect:.3}%)",
                     self.first_intersect.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
                 "second_intersect",
                 &format_args!(
-                    "({:.3}ms, {second_gallop:.3}%, {pl_second_gallop:.3}%)",
+                    "({:.3}ms, {second_intersect:.3}%)",
                     self.second_intersect.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
                 "first_result",
                 &format_args!(
-                    "({:.3}ms, {first_result:.3}%, {pl_first_result:.3}%)",
+                    "({:.3}ms, {first_result:.3}%)",
                     self.first_result.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
                 "second_result",
                 &format_args!(
-                    "({:.3}ms, {second_result:.3}%, {pl_second_result:.3}%)",
+                    "({:.3}ms, {second_result:.3}%)",
                     self.second_result.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
                 "add_lhs",
                 &format_args!(
-                    "({:.3}ms, {add_lhs:.3}%, {pl_add_lhs:.3}%)",
+                    "({:.3}ms, {add_lhs:.3}%)",
                     self.add_lhs.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
                 "add_rhs",
                 &format_args!(
-                    "({:.3}ms, {add_rhs:.3}%, {pl_add_rhs:.3}%)",
+                    "({:.3}ms, {add_rhs:.3}%)",
                     self.add_rhs.load(Relaxed) as f64 / 1000f64
                 ),
             )
@@ -737,15 +726,15 @@ where
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
             let lhs = AlignedBorrowRoaringishPacked::new(&lhs);
-            lhs.intersect::<I>(rhs, rhs_len, stats)
+            lhs.intersect::<I>(*rhs, rhs_len, stats)
         } else {
-            lhs.intersect::<I>(rhs, rhs_len, stats)
+            lhs.intersect::<I>(*rhs, rhs_len, stats)
         };
         let mut borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
 
         for t in it {
             let rhs = token_to_packed.get(t).unwrap();
-            lhs = borrow_lhs.intersect::<I>(rhs, t.len() as u32, stats);
+            lhs = borrow_lhs.intersect::<I>(*rhs, t.len() as u32, stats);
             borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
         }
 
