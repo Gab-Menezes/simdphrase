@@ -97,10 +97,10 @@ where
 
     for q in queries.iter() {
         let stats = Stats::default();
-        for _ in 0..20 {
-            let doc_ids = searcher.search::<Intersect>(q, &stats);
-            std::hint::black_box(doc_ids);
-        }
+        // for _ in 0..20 {
+        //     let doc_ids = searcher.search::<Intersect>(q, &stats);
+        //     std::hint::black_box(doc_ids);
+        // }
 
         let stats = Stats::default();
         let b = std::time::Instant::now();

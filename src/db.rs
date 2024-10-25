@@ -1,5 +1,13 @@
 use std::{
-    cmp::Reverse, collections::{BTreeSet, BinaryHeap, HashSet}, fmt::Debug, fs::File, io::BufWriter, num::NonZero, path::Path, sync::atomic::{AtomicU64, Ordering::Relaxed}
+    cmp::Reverse,
+    collections::{BTreeSet, BinaryHeap, HashSet},
+    fmt::Debug,
+    fs::File,
+    io::BufWriter,
+    num::NonZero,
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    u32,
 };
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
@@ -10,13 +18,27 @@ use heed::{
 };
 use memmap2::{Mmap, MmapMut};
 use rkyv::{
-    api::high::HighSerializer, boxed::{ArchivedBox, BoxResolver}, deserialize, rancor::Fallible, ser::{allocator::ArenaHandle, writer::IoWriter, Allocator, Serializer, Writer}, tuple::{ArchivedTuple2, ArchivedTuple3}, util::AlignedVec, vec::{ArchivedVec, VecResolver}, with::Inline, Archive, Archived, Deserialize, Place, Serialize
+    api::high::HighSerializer,
+    boxed::{ArchivedBox, BoxResolver},
+    deserialize,
+    rancor::Fallible,
+    ser::{allocator::ArenaHandle, writer::IoWriter, Allocator, Serializer, Writer},
+    tuple::{ArchivedTuple2, ArchivedTuple3},
+    util::AlignedVec,
+    vec::{ArchivedVec, VecResolver},
+    with::Inline,
+    Archive, Archived, Deserialize, Place, Serialize,
 };
 
 use crate::{
-    codecs::{NativeU32, ZeroCopyCodec}, decreasing_window_iter::DecreasingWindows, normalize, roaringish::{
-        intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind, RoaringishPackedResolver,
-    }, tokenize, AlignedBorrowRoaringishPacked
+    codecs::{NativeU32, ZeroCopyCodec},
+    decreasing_window_iter::DecreasingWindows,
+    normalize,
+    roaringish::{
+        intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind,
+        RoaringishPackedResolver,
+    },
+    tokenize, AlignedBorrowRoaringishPacked,
 };
 
 #[derive(Archive, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,6 +53,8 @@ mod db_constants {
     pub const FILE_ROARINGISH_PACKED: &'static str = "roaringish_packed";
     pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "temp_token_to_packed";
 }
+
+pub const MAX_WINDOW_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
 
 #[derive(Default)]
 pub struct Stats {
@@ -489,28 +513,130 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn merge_tokens(
+    pub(crate) fn merge_and_minimize_tokens<'a, 'b, 'c>(
         &self,
-        tokens: &[&str],
-    ) -> Vec<(String, u32)> {
-        todo!()
+        rotxn: &RoTxn,
+        tokens: &'b [&'c str],
+        common_tokens: &HashSet<Box<str>>,
+        mmap: &'a Mmap,
+    ) -> (Vec<&'b [&'c str]>, AHashMap<&'b [&'c str], AlignedBorrowRoaringishPacked<'a>>) {
+        // TODO: improve this, temporary code just to make sure things working
+        // maybe use smallvec ?
+        fn inner_merge_and_minimize_tokens<'a, 'b, 'c, D>(
+            me: &DB<D>,
+            rotxn: &RoTxn,
+            tokens: &'b [&'c str],
+            common_tokens: &HashSet<Box<str>>,
+            token_to_packed: &mut AHashMap<&'b [&'c str], AlignedBorrowRoaringishPacked<'a>>,
+            mmap: &'a Mmap,
+            memo_token_to_score_choices: &mut AHashMap<&'b [&'c str], (usize, Vec<&'b [&'c str]>)>,
+        ) -> usize
+        where
+            D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
+                + Archive
+                + 'static
+        {
+            if let Some(r) = memo_token_to_score_choices.get(tokens) {
+                return r.0;
+            }
 
-        // let mut final_tokens = Vec::with_capacity(tokens.len());
-        // let max_window_len = 3.try_into().unwrap();
-        // let mut it = DecreasingWindows::new(tokens, max_window_len);
-        // while let Some(tokens) = it.next() {
-        //     let mut i = tokens[1..].iter().take_while(|t| common_tokens.contains(**t)).count();
-        //     if common_tokens.contains(tokens[0]) {
-        //         i += 1;
-        //     }
-        //     let len = (i + 1).min(tokens.len());
-        //     let token: String = tokens[..len].iter().copied().intersperse(" ").collect();
-        //     final_tokens.push((token, len as u32));
-        //     for _ in 0..(len - 1) {
-        //         let _ = it.next();
-        //     }
-        // }
-        // final_tokens
+            if tokens.len() == 1 {
+                let score = match token_to_packed.get(tokens) {
+                    Some(packed) => packed.doc_id_groups.len(),
+                    None => {
+                        let concatened: String = tokens.into_iter().copied().intersperse(" ").collect();
+                        match me.get_roaringish_packed(rotxn, &concatened, mmap) {
+                            Some(packed) => {
+                                let score = packed.doc_id_groups.len();
+                                token_to_packed.insert(tokens, packed);
+                                score
+                            },
+                            None => return 0,
+                        }
+                    },
+                };
+                memo_token_to_score_choices.insert(tokens, (score, vec![tokens]));
+                return score;
+            }
+
+            let mut final_score = usize::MAX;
+            let mut choices = Vec::new();
+
+            // TODO: fix this, it looks ugly
+            let mut end = tokens[1..].into_iter().take(MAX_WINDOW_LEN.get() - 1).take_while(|t| common_tokens.contains(**t)).count() + 2;
+            if common_tokens.contains(tokens[0]) {
+                end += 1;
+            }
+            end = end.min(MAX_WINDOW_LEN.get() + 1).min(tokens.len() + 1);
+
+            for i in (1..end).rev() {
+                let (tokens, rem) = tokens.split_at(i);
+
+                let score = match token_to_packed.get(tokens) {
+                    Some(packed) => packed.doc_id_groups.len(),
+                    None => {
+                        let concatened: String = tokens.into_iter().copied().intersperse(" ").collect();
+                        match me.get_roaringish_packed(rotxn, &concatened, mmap) {
+                            Some(packed) => {
+                                let score = packed.doc_id_groups.len();
+                                token_to_packed.insert(tokens, packed);
+                                score
+                            },
+                            None => return 0,
+                        }
+                    },
+                };
+
+                let mut rem_score = 0;
+                if !rem.is_empty() {
+                    rem_score = inner_merge_and_minimize_tokens(me, rotxn, rem, common_tokens, token_to_packed, mmap, memo_token_to_score_choices);
+                    if rem_score == 0 {
+                        return 0;
+                    }
+                }
+
+                let calc_score = score + rem_score;
+                if calc_score < final_score {
+                    final_score = calc_score;
+                    choices.clear();
+                    choices.push(tokens);
+                    if let Some((_, rem_choices)) = memo_token_to_score_choices.get(rem) {
+                        choices.extend(rem_choices.into_iter());
+                    };
+                }
+            }
+
+            memo_token_to_score_choices.insert(tokens, (final_score, choices));
+            final_score
+        }
+
+        if common_tokens.is_empty() {
+            let mut choices = Vec::with_capacity(tokens.len());
+            let mut token_to_packed = AHashMap::with_capacity(tokens.len());
+            for i in 0..tokens.len() {
+                match self.get_roaringish_packed(rotxn, tokens[i], mmap) {
+                    Some(packed) => token_to_packed.insert(tokens, packed),
+                    None => return (Vec::new(), AHashMap::new()),
+                };
+                choices.push(&tokens[i..i+1]);
+            }
+            return (choices, token_to_packed);
+        }
+
+        let n = MAX_WINDOW_LEN.get();
+        let l = tokens.len();
+        let len = n * (l.max(n) - n + 1) + ((n - 1) * n) / 2;
+        let mut memo_token_to_score_choices = AHashMap::with_capacity(len);
+        let mut token_to_packed = AHashMap::with_capacity(len);
+
+        let score = inner_merge_and_minimize_tokens(self, rotxn, tokens, common_tokens, &mut token_to_packed, mmap, &mut memo_token_to_score_choices);
+        if score == 0 {
+            return (Vec::new(), AHashMap::new())
+        }
+        match memo_token_to_score_choices.remove(tokens) {
+            Some((_, choices)) => (choices, token_to_packed),
+            None => (Vec::new(), AHashMap::new()),
+        }
     }
 
     #[inline(always)]
@@ -531,7 +657,9 @@ where
         let values_offset = unsafe { mmap.as_ptr().add(end).align_offset(16) };
 
         let offset_advise = begin;
-        let len_advise = offset.doc_id_group_len.to_native() as usize + values_offset + offset.values_len.to_native() as usize;
+        let len_advise = offset.doc_id_group_len.to_native() as usize
+            + values_offset
+            + offset.values_len.to_native() as usize;
 
         if end + values_offset >= mmap.len() {
             return None;
@@ -542,7 +670,8 @@ where
         assert!(l.is_empty());
         assert!(r.is_empty());
 
-        mmap.advise_range(memmap2::Advice::Sequential, offset_advise, len_advise).unwrap();
+        mmap.advise_range(memmap2::Advice::Sequential, offset_advise, len_advise)
+            .unwrap();
 
         Some(AlignedBorrowRoaringishPacked::new_raw(
             doc_id_groups,
@@ -577,56 +706,46 @@ where
         }
 
         let b = std::time::Instant::now();
-        let final_tokens = self.merge_tokens(&tokens);
+        let (final_tokens, token_to_packed) = self.merge_and_minimize_tokens(&rotxn, &tokens, &common_tokens, mmap);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-        if final_tokens.len() == 1 {
-            return self
-                .get_roaringish_packed(&rotxn, &final_tokens.first().unwrap().0, mmap)
-                .map(|p| p.get_doc_ids())
-                .unwrap_or_default();
+
+        if final_tokens.is_empty() {
+            return Vec::new();
         }
 
-        let deduped_tokens: AHashSet<_> = final_tokens.iter().map(|(t, _)| t).collect();
-        let mut token_to_packed = AHashMap::with_capacity(deduped_tokens.len());
-        for token in deduped_tokens.iter() {
-            let b = std::time::Instant::now();
-            let Some(packed) = self.get_roaringish_packed(&rotxn, token, mmap) else {
-                return Vec::new();
-            };
-            token_to_packed.insert(*token, packed);
-
-            stats
-                .get_pls
-                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        if final_tokens.len() == 1 {
+            return token_to_packed.get(final_tokens.first().unwrap()).unwrap().get_doc_ids();
         }
 
         let mut it = final_tokens.iter();
 
-        let (lhs, lhs_len) = it.next().unwrap();
+        let lhs = it.next().unwrap();
+        let lhs_len = lhs.len() as u32;
         let lhs = token_to_packed.get(lhs).unwrap();
 
-        let (rhs, rhs_len) = it.next().unwrap();
+        let rhs = it.next().unwrap();
+        let rhs_len = rhs.len() as u32;
         let rhs = token_to_packed.get(rhs).unwrap();
 
-        let mut lhs = if *lhs_len > 1 {
+        let mut lhs = if lhs_len > 1 {
             let b = std::time::Instant::now();
-            let lhs = lhs + (*lhs_len - 1);
+            let lhs = lhs + (lhs_len - 1);
             stats
                 .add_lhs
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
             let lhs = AlignedBorrowRoaringishPacked::new(&lhs);
-            lhs.intersect::<I>(rhs, *rhs_len, stats)
+            lhs.intersect::<I>(rhs, rhs_len, stats)
         } else {
-            lhs.intersect::<I>(rhs, *rhs_len, stats)
+            lhs.intersect::<I>(rhs, rhs_len, stats)
         };
         let mut borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
 
-        for (t, t_len) in it {
+        for t in it {
             let rhs = token_to_packed.get(t).unwrap();
-            lhs = borrow_lhs.intersect::<I>(rhs, *t_len, stats);
+            lhs = borrow_lhs.intersect::<I>(rhs, t.len() as u32, stats);
             borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
         }
 

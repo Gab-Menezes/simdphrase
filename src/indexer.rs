@@ -9,7 +9,7 @@ use rkyv::{
 };
 
 use crate::{
-    db::{DB},
+    db::{DB, MAX_WINDOW_LEN},
     decreasing_window_iter::DecreasingWindows,
     roaringish::{RoaringishPacked, MAX_VALUE},
     utils::{normalize, tokenize},
@@ -177,10 +177,9 @@ where
             return;
         }
 
-        let max_window_len = 3.try_into().unwrap();
         for (tokenized_doc, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
             let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
-            let it = DecreasingWindows::new(tokenized_doc, max_window_len);
+            let it = DecreasingWindows::new(tokenized_doc, MAX_WINDOW_LEN);
             for (pos, token_ids) in it.enumerate() {
                 let token_id = token_ids[0];
                 let token = &self.token_id_to_token[token_id as usize];
