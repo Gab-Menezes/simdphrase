@@ -31,7 +31,7 @@
 
                 "search",
                 "1",
-                "./queries.txt",
+                "./q.txt",
                 "./msmarco-50",
                 "17179869184",
                 "ms-marco"

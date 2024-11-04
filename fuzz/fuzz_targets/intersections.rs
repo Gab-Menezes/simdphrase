@@ -3,8 +3,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use phrase_search::RoaringishPacked;
-use phrase_search::BorrowRoaringishPacked;
+use phrase_search::AlignedRoaringishPacked;
+use phrase_search::AlignedBorrowRoaringishPacked;
 use phrase_search::naive::NaiveIntersect;
 use phrase_search::Intersect;
 use phrase_search::simd::SimdIntersect;
@@ -20,9 +20,9 @@ fn compare(lhs: &(Vec<u64, Aligned64>, Vec<u16, Aligned64>, Vec<u64, Aligned64>)
     }
 }
 
-fuzz_target!(|r: (RoaringishPacked, RoaringishPacked)| {
-    let lhs = BorrowRoaringishPacked::new(&r.0);
-    let rhs = BorrowRoaringishPacked::new(&r.1);
+fuzz_target!(|r: (AlignedRoaringishPacked, AlignedRoaringishPacked)| {
+    let lhs = AlignedBorrowRoaringishPacked::new(&r.0);
+    let rhs = AlignedBorrowRoaringishPacked::new(&r.1);
     
     let naive = NaiveIntersect::intersect::<true>(&lhs, &rhs);
     let simd = SimdIntersect::intersect::<true>(&lhs, &rhs);

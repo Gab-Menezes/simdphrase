@@ -1,12 +1,22 @@
 pub mod intersect;
 
-use arbitrary::{Arbitrary, Unstructured};
+use arbitrary::{unstructured::ArbitraryIter, Arbitrary, Unstructured};
 use rkyv::{Archive, Serialize};
 use std::{
+    arch::x86_64::{
+        __m256i, __m512i, _mm256_mask_compressstoreu_epi16, _mm512_mask_compressstoreu_epi64,
+    },
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
+    iter::Take,
     mem::MaybeUninit,
+    num::NonZero,
     ops::Add,
+    simd::{
+        cmp::{SimdPartialEq, SimdPartialOrd},
+        num::{SimdInt, SimdUint},
+        simd_swizzle, Simd, SimdElement,
+    },
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -150,10 +160,11 @@ impl<'a> RoaringishPackedKind<'a> {
 
         let r = match (self, other) {
             (RoaringishPackedKind::Owned(mut lhs), RoaringishPackedKind::Archived(rhs)) => {
-                lhs.doc_id_groups.extend(rhs.doc_id_groups.iter().map(|v| v.to_native()));
+                lhs.doc_id_groups
+                    .extend(rhs.doc_id_groups.iter().map(|v| v.to_native()));
                 lhs.values.extend(rhs.values.iter().map(|v| v.to_native()));
                 lhs
-            },
+            }
             (RoaringishPackedKind::Archived(lhs), RoaringishPackedKind::Archived(rhs)) => {
                 let n = lhs.doc_id_groups.len() + rhs.doc_id_groups.len();
                 let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(n);
@@ -178,9 +189,16 @@ impl<'a> RoaringishPackedKind<'a> {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub struct AlignedRoaringishPacked {
-    pub(crate) doc_id_groups: Vec<u64, Aligned64>,
-    pub(crate) values: Vec<u16, Aligned64>,
+    pub doc_id_groups: Vec<u64, Aligned64>,
+    pub values: Vec<u16, Aligned64>,
+}
+
+impl AlignedRoaringishPacked {
+    pub fn len(&self) -> usize {
+        self.doc_id_groups.len()
+    }
 }
 
 impl Default for AlignedRoaringishPacked {
@@ -192,7 +210,7 @@ impl Default for AlignedRoaringishPacked {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct AlignedBorrowRoaringishPacked<'a> {
     pub(crate) doc_id_groups: &'a [u64],
     pub(crate) values: &'a [u16],
@@ -262,7 +280,7 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
     pub fn intersect<I: Intersect>(
         self,
         mut rhs: Self,
-        rhs_len: u32,
+        rhs_len: u16,
         stats: &Stats,
     ) -> AlignedRoaringishPacked {
         let mut lhs = self;
@@ -280,19 +298,25 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
                 Ok(i) => i,
                 Err(i) => i,
             };
-            let aligned_i = i/8 * 8;
-            rhs = AlignedBorrowRoaringishPacked::new_raw(&rhs.doc_id_groups[aligned_i..], &rhs.values[aligned_i..]);
+            let aligned_i = i / 8 * 8;
+            rhs = AlignedBorrowRoaringishPacked::new_raw(
+                &rhs.doc_id_groups[aligned_i..],
+                &rhs.values[aligned_i..],
+            );
         } else if first_lhs > first_rhs {
             let i = match lhs.doc_id_groups.binary_search(&first_rhs) {
                 Ok(i) => i,
                 Err(i) => i,
             };
-            let aligned_i = i/8 * 8;
-            lhs = AlignedBorrowRoaringishPacked::new_raw(&lhs.doc_id_groups[aligned_i..], &lhs.values[aligned_i..]);
+            let aligned_i = i / 8 * 8;
+            lhs = AlignedBorrowRoaringishPacked::new_raw(
+                &lhs.doc_id_groups[aligned_i..],
+                &lhs.values[aligned_i..],
+            );
         }
         stats
-        .binary_search
-        .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+            .binary_search
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
         let (doc_id_groups, values_intersect, msb_doc_id_groups) = I::intersect::<true>(&lhs, &rhs);
@@ -422,10 +446,13 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
     }
 }
 
-impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
+impl<'a> Add<u16> for &AlignedBorrowRoaringishPacked<'a> {
     type Output = AlignedRoaringishPacked;
 
-    fn add(self, rhs: u32) -> Self::Output {
+    fn add(self, rhs: u16) -> Self::Output {
+        // Right now we only allow values to jump up to 1 group
+        assert!(rhs <= 15);
+
         unsafe {
             assume(self.doc_id_groups.len() == self.values.len());
         }
@@ -435,18 +462,17 @@ impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
         let mut values = Box::new_uninit_slice_in(n, Aligned64::default());
         let mut i = 0;
 
-        let mask = u16::MAX << rhs;
-        let bits_to_check = !mask;
-
+        let mask_current_group = u16::MAX << rhs;
+        let mask_next_group = !mask_current_group;
 
         let mut it = self.doc_id_groups.iter().zip(self.values.iter());
         let Some((doc_id_group, packed_values)) = it.next() else {
             return AlignedRoaringishPacked::default();
         };
 
-        let new_values = packed_values.rotate_left(rhs);
-        let postions_current_group = new_values & mask;
-        let postions_new_group = new_values & bits_to_check;
+        let new_values = packed_values.rotate_left(rhs as u32);
+        let postions_current_group = new_values & mask_current_group;
+        let postions_new_group = new_values & mask_next_group;
         let mut highest_doc_id_group = 0;
         if postions_current_group > 0 {
             unsafe {
@@ -467,9 +493,9 @@ impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
         assert!(i > 0);
 
         for (doc_id_group, packed_values) in it {
-            let new_values = packed_values.rotate_left(rhs);
-            let postions_current_group = new_values & mask;
-            let postions_new_group = new_values & bits_to_check;
+            let new_values = packed_values.rotate_left(rhs as u32);
+            let postions_current_group = new_values & mask_current_group;
+            let postions_new_group = new_values & mask_next_group;
             if postions_current_group > 0 {
                 if *doc_id_group > highest_doc_id_group {
                     unsafe {
@@ -514,6 +540,767 @@ impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
     }
 }
 
+// impl<'a> Add<u16> for &AlignedBorrowRoaringishPacked<'a> {
+//     type Output = AlignedRoaringishPacked;
+
+//     fn add(self, rhs: u16) -> Self::Output {
+//         const LANES: usize = 8;
+//         #[inline(always)]
+//         fn rotl_u16(a: &Simd<u16, LANES>, i: u16) -> Simd<u16, LANES> {
+//             const N: u16 = 16;
+//             let i = i % N;
+//             let p0 = a << i;
+//             let p1 = a >> (N - i);
+//             p0 | p1
+//         }
+
+//         #[inline(always)]
+//         fn write_first(
+//             r_doc_id_groups: &mut Box<[MaybeUninit<u64>], Aligned64>,
+//             r_values: &mut Box<[MaybeUninit<u16>], Aligned64>,
+//             i: &mut usize,
+//             doc_id_group: u64,
+//             postions_current_group: u16,
+//             postions_new_group: u16,
+//         ) {
+//             if postions_current_group > 0 {
+//                 unsafe {
+//                     r_doc_id_groups.get_unchecked_mut(*i).write(doc_id_group);
+//                     r_values.get_unchecked_mut(*i).write(postions_current_group);
+//                     *i += 1;
+//                 }
+//             }
+//             if postions_new_group > 0 {
+//                 unsafe {
+//                     r_doc_id_groups
+//                         .get_unchecked_mut(*i)
+//                         .write(doc_id_group + 1);
+//                     r_values.get_unchecked_mut(*i).write(postions_new_group);
+//                     *i += 1;
+//                 }
+//             }
+//             assert!(*i > 0);
+//         }
+
+//         #[inline(always)]
+//         fn write(
+//             r_doc_id_groups: &mut Box<[MaybeUninit<u64>], Aligned64>,
+//             r_values: &mut Box<[MaybeUninit<u16>], Aligned64>,
+//             i: &mut usize,
+//             doc_id_group: u64,
+//             postions_current_group: u16,
+//             postions_new_group: u16,
+//         ) {
+//             let highest_doc_id_group =
+//                 unsafe { r_doc_id_groups.get_unchecked(*i - 1).assume_init() };
+//             if postions_current_group > 0 {
+//                 if doc_id_group > highest_doc_id_group {
+//                     unsafe {
+//                         r_doc_id_groups.get_unchecked_mut(*i).write(doc_id_group);
+//                         r_values.get_unchecked_mut(*i).write(postions_current_group);
+//                         *i += 1;
+//                     }
+//                 } else {
+//                     unsafe {
+//                         *r_values.get_unchecked_mut(*i - 1).assume_init_mut() |=
+//                             postions_current_group;
+//                     }
+//                 }
+//             }
+//             if postions_new_group > 0 {
+//                 unsafe {
+//                     r_doc_id_groups
+//                         .get_unchecked_mut(*i)
+//                         .write(doc_id_group + 1);
+//                     r_values.get_unchecked_mut(*i).write(postions_new_group);
+//                     *i += 1;
+//                 }
+//             }
+//         }
+
+//         #[inline(always)]
+//         fn swizzle<T: SimdElement>(a: Simd<T, LANES>, b: Simd<T, LANES>) -> Simd<T, { LANES * 2 }> {
+//             simd_swizzle!(
+//                 a,
+//                 b,
+//                 [0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,]
+//             )
+//         }
+
+//         #[inline(always)]
+//         fn split<T: SimdElement>(a: Simd<T, { LANES * 2 }>) -> (Simd<T, LANES>, Simd<T, LANES>) {
+//             let arr = a.to_array();
+//             unsafe {
+//                 let low = Simd::from_array(arr[..LANES].try_into().unwrap_unchecked());
+//                 let high = Simd::from_array(arr[LANES..].try_into().unwrap_unchecked());
+//                 (low, high)
+//             }
+//         }
+
+//         #[inline(always)]
+//         fn calc(
+//             doc_id_group: &Simd<u64, LANES>,
+//             values: &Simd<u16, LANES>,
+//             rhs: u16,
+//             splat_current_group_mask: &Simd<u16, LANES>,
+//             splat_new_group_mask: &Simd<u16, LANES>,
+//         ) -> (
+//             Simd<u64, LANES>,
+//             u8,
+//             Simd<u64, LANES>,
+//             u8,
+//             Simd<u16, { 2 * LANES }>,
+//             u16,
+//         ) {
+//             let doc_id_group_p_1 = doc_id_group + Simd::splat(1);
+
+//             let new_values = rotl_u16(values, rhs);
+//             let postions_current_group = new_values & splat_current_group_mask;
+//             let postions_new_group = new_values & splat_new_group_mask;
+
+//             let concated_doc_id_group = swizzle(*doc_id_group, doc_id_group_p_1);
+//             let concated_positions = swizzle(postions_current_group, postions_new_group);
+
+//             let rotr_concated_doc_id_group = concated_doc_id_group.rotate_elements_right::<1>();
+//             let rotr_concated_positions = concated_positions.rotate_elements_right::<1>();
+
+//             let mask = concated_doc_id_group
+//                 .simd_eq(rotr_concated_doc_id_group)
+//                 .to_int()
+//                 .cast::<u16>();
+//             let rotl_mask = mask.rotate_elements_left::<1>();
+//             let final_positions =
+//                 !rotl_mask & (concated_positions | (mask & rotr_concated_positions));
+//             // u16 because 2*LANES
+//             let mask = final_positions.simd_gt(Simd::splat(0)).to_bitmask() as u16;
+//             let mask_0 = mask as u8;
+//             let mask_1 = (mask >> 8) as u8;
+//             let (final_doc_id_group_0, final_doc_id_group_1) = split(concated_doc_id_group);
+
+//             (
+//                 final_doc_id_group_0,
+//                 mask_0,
+//                 final_doc_id_group_1,
+//                 mask_1,
+//                 final_positions,
+//                 mask,
+//             )
+//         }
+
+//         // Right now we only allow values to jump up to 1 group
+//         assert!(rhs <= 15);
+
+//         unsafe {
+//             assume(self.doc_id_groups.len() == self.values.len());
+//         }
+
+//         if self.doc_id_groups.is_empty() {
+//             return AlignedRoaringishPacked::default();
+//         }
+
+//         let n = self.doc_id_groups.len() * 2;
+//         let mut r_doc_id_groups = Box::<[u64], _>::new_uninit_slice_in(n, Aligned64::default());
+//         let mut r_values = Box::<[u16], _>::new_uninit_slice_in(n, Aligned64::default());
+//         let mut i = 0;
+
+//         let current_group_mask = u16::MAX << rhs;
+//         let new_group_mask = !current_group_mask;
+
+//         let splat_current_group_mask = Simd::splat(current_group_mask);
+//         let splat_new_group_mask = Simd::splat(new_group_mask);
+
+//         let (p_doc_id_groups, doc_id_groups, rem_doc_id_groups) =
+//             self.doc_id_groups.as_simd::<LANES>();
+//         let (p_values, values, rem_values) = self.values.as_simd::<LANES>();
+//         assert!(p_doc_id_groups.is_empty());
+//         assert!(p_values.is_empty());
+//         assert_eq!(rem_doc_id_groups.len(), rem_values.len());
+
+//         let mut it = doc_id_groups.into_iter().zip(values);
+
+//         let Some((doc_id_group, values)) = it.next() else {
+//             let new_values = rem_values[0].rotate_left(rhs as u32);
+//             write_first(
+//                 &mut r_doc_id_groups,
+//                 &mut r_values,
+//                 &mut i,
+//                 rem_doc_id_groups[0],
+//                 new_values & current_group_mask,
+//                 new_values & new_group_mask,
+//             );
+
+//             for (doc_id_group, values) in rem_doc_id_groups[1..].into_iter().zip(&rem_values[1..]) {
+//                 let new_values = values.rotate_left(rhs as u32);
+//                 write(
+//                     &mut r_doc_id_groups,
+//                     &mut r_values,
+//                     &mut i,
+//                     *doc_id_group,
+//                     new_values & current_group_mask,
+//                     new_values & new_group_mask,
+//                 );
+//             }
+
+//             return unsafe {
+//                 AlignedRoaringishPacked {
+//                     doc_id_groups: Vec::from_raw_parts_in(
+//                         Box::into_raw(r_doc_id_groups) as *mut _,
+//                         i,
+//                         n,
+//                         Aligned64::default(),
+//                     ),
+//                     values: Vec::from_raw_parts_in(
+//                         Box::into_raw(r_values) as *mut _,
+//                         i,
+//                         n,
+//                         Aligned64::default(),
+//                     ),
+//                 }
+//             };
+//         };
+
+//         let (final_doc_id_group_0, mask_0, final_doc_id_group_1, mask_1, final_positions, mask) =
+//             calc(
+//                 doc_id_group,
+//                 values,
+//                 rhs,
+//                 &splat_current_group_mask,
+//                 &splat_new_group_mask,
+//             );
+
+//         unsafe {
+//             _mm256_mask_compressstoreu_epi16(
+//                 r_values.as_mut_ptr().add(i) as *mut _,
+//                 mask,
+//                 final_positions.into(),
+//             );
+
+//             _mm512_mask_compressstoreu_epi64(
+//                 r_doc_id_groups.as_mut_ptr().add(i) as *mut _,
+//                 mask_0,
+//                 final_doc_id_group_0.into(),
+//             );
+
+//             i += mask_0.count_ones() as usize;
+
+//             _mm512_mask_compressstoreu_epi64(
+//                 r_doc_id_groups.as_mut_ptr().add(i) as *mut _,
+//                 mask_1,
+//                 final_doc_id_group_1.into(),
+//             );
+
+//             i += mask_1.count_ones() as usize;
+//         }
+
+//         for (doc_id_group, values) in it {
+//             let last_doc_id_groups =
+//                 unsafe { r_doc_id_groups.get_unchecked_mut(i - 1).assume_init() };
+//             // is it ok to hold &mut and write through *mut using compress store ?
+//             let last_value = unsafe { r_values.get_unchecked_mut(i - 1).assume_init() };
+//             let fst = doc_id_group.as_array()[0];
+
+//             let (final_doc_id_group_0, mask_0, final_doc_id_group_1, mask_1, final_positions, mask) =
+//                 calc(
+//                     doc_id_group,
+//                     values,
+//                     rhs,
+//                     &splat_current_group_mask,
+//                     &splat_new_group_mask,
+//                 );
+
+//             // TODO: maybe try branchless
+//             if fst == last_doc_id_groups && (mask & 1) == 1 {
+//                 unsafe {
+//                     _mm256_mask_compressstoreu_epi16(
+//                         r_values.as_mut_ptr().add(i - 1) as *mut _,
+//                         mask,
+//                         final_positions.into(),
+//                     );
+//                     *r_values.get_unchecked_mut(i - 1).assume_init_mut() |= last_value;
+
+//                     _mm512_mask_compressstoreu_epi64(
+//                         r_doc_id_groups.as_mut_ptr().add(i - 1) as *mut _,
+//                         mask_0,
+//                         final_doc_id_group_0.into(),
+//                     );
+
+//                     i += mask_0.count_ones() as usize;
+
+//                     _mm512_mask_compressstoreu_epi64(
+//                         r_doc_id_groups.as_mut_ptr().add(i - 1) as *mut _,
+//                         mask_1,
+//                         final_doc_id_group_1.into(),
+//                     );
+
+//                     i += mask_1.count_ones() as usize;
+//                     i -= 1;
+//                 }
+//             } else {
+//                 unsafe {
+//                     _mm256_mask_compressstoreu_epi16(
+//                         r_values.as_mut_ptr().add(i) as *mut _,
+//                         mask,
+//                         final_positions.into(),
+//                     );
+
+//                     _mm512_mask_compressstoreu_epi64(
+//                         r_doc_id_groups.as_mut_ptr().add(i) as *mut _,
+//                         mask_0,
+//                         final_doc_id_group_0.into(),
+//                     );
+
+//                     i += mask_0.count_ones() as usize;
+
+//                     _mm512_mask_compressstoreu_epi64(
+//                         r_doc_id_groups.as_mut_ptr().add(i) as *mut _,
+//                         mask_1,
+//                         final_doc_id_group_1.into(),
+//                     );
+
+//                     i += mask_1.count_ones() as usize;
+//                 }
+//             }
+//         }
+
+//         for (doc_id_group, values) in rem_doc_id_groups.into_iter().zip(rem_values) {
+//             let new_values = values.rotate_left(rhs as u32);
+//             write(
+//                 &mut r_doc_id_groups,
+//                 &mut r_values,
+//                 &mut i,
+//                 *doc_id_group,
+//                 new_values & current_group_mask,
+//                 new_values & new_group_mask,
+//             );
+//         }
+
+//         unsafe {
+//             AlignedRoaringishPacked {
+//                 doc_id_groups: Vec::from_raw_parts_in(
+//                     Box::into_raw(r_doc_id_groups) as *mut _,
+//                     i,
+//                     n,
+//                     Aligned64::default(),
+//                 ),
+//                 values: Vec::from_raw_parts_in(
+//                     Box::into_raw(r_values) as *mut _,
+//                     i,
+//                     n,
+//                     Aligned64::default(),
+//                 ),
+//             }
+//         }
+//     }
+// }
+
+// impl<'a> Add<u16> for &AlignedBorrowRoaringishPacked<'a> {
+//     type Output = AlignedRoaringishPacked;
+
+//     fn add(self, rhs: u16) -> Self::Output {
+//         const LANES: usize = 8;
+//         #[inline(always)]
+//         fn rotl_u16(a: &Simd<u16, LANES>, i: u16) -> Simd<u16, LANES> {
+//             const N: u16 = 16;
+//             let i = i % N;
+//             let p0 = a << i;
+//             let p1 = a >> (N - i);
+//             p0 | p1
+//         }
+
+//         #[inline(always)]
+//         fn write_first(
+//             r_doc_id_groups: &mut Box<[MaybeUninit<u64>], Aligned64>,
+//             r_values: &mut Box<[MaybeUninit<u16>], Aligned64>,
+//             i: &mut usize,
+//             doc_id_group: u64,
+//             postions_current_group: u16,
+//             postions_new_group: u16,
+//         ) {
+//             if postions_current_group > 0 {
+//                 unsafe {
+//                     r_doc_id_groups.get_unchecked_mut(*i).write(doc_id_group);
+//                     r_values.get_unchecked_mut(*i).write(postions_current_group);
+//                     *i += 1;
+//                 }
+//             }
+//             if postions_new_group > 0 {
+//                 unsafe {
+//                     r_doc_id_groups
+//                         .get_unchecked_mut(*i)
+//                         .write(doc_id_group + 1);
+//                     r_values.get_unchecked_mut(*i).write(postions_new_group);
+//                     *i += 1;
+//                 }
+//             }
+//             assert!(*i > 0);
+//         }
+
+//         #[inline(always)]
+//         fn write(
+//             r_doc_id_groups: &mut Box<[MaybeUninit<u64>], Aligned64>,
+//             r_values: &mut Box<[MaybeUninit<u16>], Aligned64>,
+//             i: &mut usize,
+//             doc_id_group: u64,
+//             postions_current_group: u16,
+//             postions_new_group: u16,
+//         ) {
+//             let highest_doc_id_group =
+//                 unsafe { r_doc_id_groups.get_unchecked(*i - 1).assume_init() };
+//             if postions_current_group > 0 {
+//                 if doc_id_group > highest_doc_id_group {
+//                     unsafe {
+//                         r_doc_id_groups.get_unchecked_mut(*i).write(doc_id_group);
+//                         r_values.get_unchecked_mut(*i).write(postions_current_group);
+//                         *i += 1;
+//                     }
+//                 } else {
+//                     unsafe {
+//                         *r_values.get_unchecked_mut(*i - 1).assume_init_mut() |=
+//                             postions_current_group;
+//                     }
+//                 }
+//             }
+//             if postions_new_group > 0 {
+//                 unsafe {
+//                     r_doc_id_groups
+//                         .get_unchecked_mut(*i)
+//                         .write(doc_id_group + 1);
+//                     r_values.get_unchecked_mut(*i).write(postions_new_group);
+//                     *i += 1;
+//                 }
+//             }
+//         }
+
+//         // Right now we only allow values to jump up to 1 group
+//         assert!(rhs <= 15);
+
+//         unsafe {
+//             assume(self.doc_id_groups.len() == self.values.len());
+//         }
+
+//         if self.doc_id_groups.is_empty() {
+//             return AlignedRoaringishPacked::default();
+//         }
+
+//         let n = self.doc_id_groups.len() * 2;
+//         let mut r_doc_id_groups = Box::<[u64], _>::new_uninit_slice_in(n, Aligned64::default());
+//         let mut r_values = Box::<[u16], _>::new_uninit_slice_in(n, Aligned64::default());
+//         let mut i = 0;
+
+//         let current_group_mask = u16::MAX << rhs;
+//         let new_group_mask = !current_group_mask;
+
+//         let splat_current_group_mask = Simd::splat(current_group_mask);
+//         let splat_new_group_mask = Simd::splat(new_group_mask);
+
+//         let doc_id_groups = self.doc_id_groups.array_chunks::<LANES>();
+//         let rem_doc_id_groups = doc_id_groups.remainder();
+//         let (p_values, values, rem_values) = self.values.as_simd::<LANES>();
+//         assert!(p_values.is_empty());
+//         assert_eq!(rem_doc_id_groups.len(), rem_values.len());
+
+//         let mut it = doc_id_groups.into_iter().zip(values);
+
+//         let Some((doc_id_group, values)) = it.next() else {
+//             let new_values = rem_values[0].rotate_left(rhs as u32);
+//             write_first(
+//                 &mut r_doc_id_groups,
+//                 &mut r_values,
+//                 &mut i,
+//                 rem_doc_id_groups[0],
+//                 new_values & current_group_mask,
+//                 new_values & new_group_mask,
+//             );
+
+//             for (doc_id_group, values) in rem_doc_id_groups[1..].into_iter().zip(&rem_values[1..]) {
+//                 let new_values = values.rotate_left(rhs as u32);
+//                 write(
+//                     &mut r_doc_id_groups,
+//                     &mut r_values,
+//                     &mut i,
+//                     *doc_id_group,
+//                     new_values & current_group_mask,
+//                     new_values & new_group_mask,
+//                 );
+//             }
+
+//             return unsafe {
+//                 AlignedRoaringishPacked {
+//                     doc_id_groups: Vec::from_raw_parts_in(
+//                         Box::into_raw(r_doc_id_groups) as *mut _,
+//                         i,
+//                         n,
+//                         Aligned64::default(),
+//                     ),
+//                     values: Vec::from_raw_parts_in(
+//                         Box::into_raw(r_values) as *mut _,
+//                         i,
+//                         n,
+//                         Aligned64::default(),
+//                     ),
+//                 }
+//             };
+//         };
+
+//         let new_values = rotl_u16(values, rhs);
+//         let postions_current_group = new_values & splat_current_group_mask;
+//         let postions_new_group = new_values & splat_new_group_mask;
+
+//         let postions_current_group = postions_current_group.as_array();
+//         let postions_new_group = postions_new_group.as_array();
+
+//         write_first(
+//             &mut r_doc_id_groups,
+//             &mut r_values,
+//             &mut i,
+//             doc_id_group[0],
+//             postions_current_group[0],
+//             postions_new_group[0],
+//         );
+
+//         for ((doc_id_group, postions_current_group), postions_new_group) in doc_id_group[1..]
+//             .into_iter()
+//             .zip(&postions_current_group[1..])
+//             .zip(&postions_new_group[1..])
+//         {
+//             write(
+//                 &mut r_doc_id_groups,
+//                 &mut r_values,
+//                 &mut i,
+//                 *doc_id_group,
+//                 *postions_current_group,
+//                 *postions_new_group,
+//             );
+//         }
+
+//         for (doc_id_group, values) in it {
+//             let new_values = rotl_u16(values, rhs);
+//             let postions_current_group = new_values & splat_current_group_mask;
+//             let postions_new_group = new_values & splat_new_group_mask;
+
+//             let postions_current_group = postions_current_group.as_array();
+//             let postions_new_group = postions_new_group.as_array();
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[0],
+//             //     postions_current_group[0],
+//             //     postions_new_group[0],
+//             // );
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[1],
+//             //     postions_current_group[1],
+//             //     postions_new_group[1],
+//             // );
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[2],
+//             //     postions_current_group[2],
+//             //     postions_new_group[2],
+//             // );
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[3],
+//             //     postions_current_group[3],
+//             //     postions_new_group[3],
+//             // );
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[4],
+//             //     postions_current_group[4],
+//             //     postions_new_group[4],
+//             // );
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[5],
+//             //     postions_current_group[5],
+//             //     postions_new_group[5],
+//             // );
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[6],
+//             //     postions_current_group[6],
+//             //     postions_new_group[6],
+//             // );
+//             // write(
+//             //     &mut r_doc_id_groups,
+//             //     &mut r_values,
+//             //     &mut i,
+//             //     doc_id_group[7],
+//             //     postions_current_group[7],
+//             //     postions_new_group[7],
+//             // );
+
+//             for ((doc_id_group, postions_current_group), postions_new_group) in doc_id_group
+//                 .into_iter()
+//                 .zip(postions_current_group)
+//                 .zip(postions_new_group)
+//             {
+//                 write(
+//                     &mut r_doc_id_groups,
+//                     &mut r_values,
+//                     &mut i,
+//                     *doc_id_group,
+//                     *postions_current_group,
+//                     *postions_new_group,
+//                 );
+//             }
+//         }
+
+//         for (doc_id_group, values) in rem_doc_id_groups.into_iter().zip(rem_values) {
+//             let new_values = values.rotate_left(rhs as u32);
+//             write(
+//                 &mut r_doc_id_groups,
+//                 &mut r_values,
+//                 &mut i,
+//                 *doc_id_group,
+//                 new_values & current_group_mask,
+//                 new_values & new_group_mask,
+//             );
+//         }
+
+//         unsafe {
+//             AlignedRoaringishPacked {
+//                 doc_id_groups: Vec::from_raw_parts_in(
+//                     Box::into_raw(r_doc_id_groups) as *mut _,
+//                     i,
+//                     n,
+//                     Aligned64::default(),
+//                 ),
+//                 values: Vec::from_raw_parts_in(
+//                     Box::into_raw(r_values) as *mut _,
+//                     i,
+//                     n,
+//                     Aligned64::default(),
+//                 ),
+//             }
+//         }
+//     }
+// }
+
+// impl<'a> Add<u32> for &AlignedBorrowRoaringishPacked<'a> {
+//     type Output = AlignedRoaringishPacked;
+//     fn add(self, rhs: u32) -> Self::Output {
+//         unsafe {
+//             assume(self.doc_id_groups.len() == self.values.len());
+//         }
+
+//         let n = self.doc_id_groups.len() * 2;
+//         let mut doc_id_groups: Box<[MaybeUninit<u64>], Aligned64> = Box::new_uninit_slice_in(n, Aligned64::default());
+//         let mut values: Box<[u16], Aligned64> = unsafe { Box::new_zeroed_slice_in(n, Aligned64::default()).assume_init() };
+//         let mut i = 0;
+
+//         let current_mask = u16::MAX << rhs;
+//         let next_mask = !current_mask;
+
+//         let mut it = self.doc_id_groups.iter().zip(self.values.iter());
+//         let Some((doc_id_group, packed_values)) = it.next() else {
+//             return AlignedRoaringishPacked::default();
+//         };
+
+//         let new_values = packed_values.rotate_left(rhs);
+//         let postions_current_group = new_values & current_mask;
+//         let postions_new_group = new_values & next_mask;
+//         if postions_current_group > 0 {
+//             unsafe {
+//                 doc_id_groups.get_unchecked_mut(i).write(*doc_id_group);
+//                 *values.get_unchecked_mut(i) = postions_current_group;
+//                 i += 1;
+//             }
+//         }
+//         if postions_new_group > 0 {
+//             unsafe {
+//                 doc_id_groups.get_unchecked_mut(i).write(*doc_id_group + 1);
+//                 *values.get_unchecked_mut(i) = postions_new_group;
+//                 i += 1;
+//             }
+//         }
+
+//         assert!(i > 0);
+
+//         let it = it.array_chunks::<8>();
+
+//         for (doc_id_group, packed_values) in it {
+//             let new_values = packed_values.rotate_left(rhs);
+//             let postions_current_group = new_values & current_mask;
+//             let postions_new_group = new_values & next_mask;
+
+//             // doc_id_group == highest_doc_id_group && postions_current_group > 0
+//             // doc_id_group == highest_doc_id_group && postions_current_group == 0
+//             //     dont increment i
+//             //     i_doc_id_group = doc_id_group (not needed)
+//             //     i_positions |= postions_current_group
+//             // doc_id_group > highest_doc_id_group && postions_current_group > 0
+//             //     increment i
+//             //     i_doc_id_group = doc_id_group
+//             //     i_positions |= postions_current_group
+//             // doc_id_group > highest_doc_id_group && postions_current_group == 0
+//             //     dont increment i
+//             //     i_positions |= postions_current_group (not needed)
+
+//             let highest_doc_id_group = unsafe { doc_id_groups.get_unchecked(i - 1).assume_init() };
+//             i += (*doc_id_group > highest_doc_id_group && postions_current_group > 0) as usize;
+
+//             let i_doc_id_group = unsafe { doc_id_groups.get_unchecked_mut(i - 1) };
+//             let i_positions = unsafe { values.get_unchecked_mut(i - 1) };
+
+//             // maybe transform this in a cmov ?
+//             if postions_current_group > 0 {
+//                 i_doc_id_group.write(*doc_id_group);
+//             }
+//             // unsafe {
+//             //     let i_doc_id_group = std::mem::transmute::<_, &mut u64>(i_doc_id_group);
+//             //     i_doc_id_group.cmovnz(doc_id_group, (postions_current_group > 0) as u8);
+//             // }
+//             *i_positions |= postions_current_group;
+
+//             i += (postions_new_group > 0) as usize;
+//             let i_doc_id_group = unsafe { doc_id_groups.get_unchecked_mut(i - 1) };
+//             let i_positions = unsafe { values.get_unchecked_mut(i - 1) };
+
+//             if postions_new_group > 0 {
+//                 i_doc_id_group.write(*doc_id_group + 1);
+//             }
+//             // unsafe {
+//             //     let i_doc_id_group = std::mem::transmute::<_, &mut u64>(i_doc_id_group);
+//             //     i_doc_id_group.cmovnz(&(*doc_id_group + 1), (postions_new_group > 0) as u8);
+//             // }
+//             *i_positions |= postions_new_group;
+//         }
+
+//         unsafe {
+//             AlignedRoaringishPacked {
+//                 doc_id_groups: Vec::from_raw_parts_in(
+//                     Box::into_raw(doc_id_groups) as *mut _,
+//                     i,
+//                     n,
+//                     Aligned64::default(),
+//                 ),
+//                 values: Vec::from_raw_parts_in(
+//                     Box::into_raw(values) as *mut _,
+//                     i,
+//                     n,
+//                     Aligned64::default(),
+//                 ),
+//             }
+//         }
+//     }
+// }
+
 impl Binary for AlignedRoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut list = f.debug_list();
@@ -551,7 +1338,32 @@ impl<'a> Binary for AlignedBorrowRoaringishPacked<'a> {
 // impl Debug for AlignedRoaringishPacked {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 //         let mut list = f.debug_list();
-//         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.positions.iter()) {
+//         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
+//             list.entry_with(|f| {
+//                 let doc_id = get_doc_id(*doc_id_group);
+//                 let group = get_group_from_doc_id_group(*doc_id_group);
+//                 f.debug_tuple("")
+//                     .field(&doc_id)
+//                     .field(&group)
+//                     .field_with(|f| {
+//                         f.debug_list()
+//                             .entries(
+//                                 (0..16u32)
+//                                     .filter_map(|i| ((encoded_values >> i) & 1 == 1).then_some(i)),
+//                             )
+//                             .finish()
+//                     })
+//                     .finish()
+//             });
+//         }
+//         list.finish()
+//     }
+// }
+
+// impl<'a> Debug for AlignedBorrowRoaringishPacked<'a> {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         let mut list = f.debug_list();
+//         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
 //             list.entry_with(|f| {
 //                 let doc_id = get_doc_id(*doc_id_group);
 //                 let group = get_group_from_doc_id_group(*doc_id_group);
@@ -607,7 +1419,7 @@ impl<'a> Display for AlignedBorrowRoaringishPacked<'a> {
 
 impl<'a> Arbitrary<'a> for AlignedRoaringishPacked {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        let len = u.arbitrary_len::<(u64, u16)>()?;
+        let len = u.arbitrary_len::<(u64, NonZero<u16>)>()?;
 
         let it = u.arbitrary_iter()?.take(len);
         let mut doc_id_groups: Vec<u64, Aligned64> =
@@ -624,10 +1436,12 @@ impl<'a> Arbitrary<'a> for AlignedRoaringishPacked {
             }
         }
 
-        let it = u.arbitrary_iter()?.take(doc_id_groups.len());
+        let it = u
+            .arbitrary_iter::<NonZero<u16>>()?
+            .take(doc_id_groups.len());
         let mut values: Vec<u16, Aligned64> = Vec::with_capacity_in(len, Aligned64::default());
         for v in it {
-            values.push(v?);
+            values.push(v?.get());
         }
 
         if doc_id_groups.len() != values.len() {

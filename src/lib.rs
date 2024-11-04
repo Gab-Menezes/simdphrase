@@ -14,6 +14,7 @@
 #![feature(allocator_api)]
 #![feature(str_as_str)]
 #![feature(pointer_is_aligned_to)]
+#![feature(array_chunks)]
 
 mod codecs;
 mod db;
@@ -30,6 +31,7 @@ pub use indexer::CommonTokens;
 pub use roaringish::intersect::naive;
 pub use roaringish::intersect::simd;
 pub use roaringish::intersect::Intersect;
+pub use roaringish::AlignedRoaringishPacked;
 pub use roaringish::AlignedBorrowRoaringishPacked;
 pub use roaringish::RoaringishPacked;
 pub use searcher::Searcher;

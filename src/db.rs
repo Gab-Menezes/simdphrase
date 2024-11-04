@@ -711,11 +711,11 @@ where
         let mut it = final_tokens.iter();
 
         let lhs = it.next().unwrap();
-        let lhs_len = lhs.len() as u32;
+        let lhs_len = lhs.len() as u16;
         let lhs = token_to_packed.get(lhs).unwrap();
 
         let rhs = it.next().unwrap();
-        let rhs_len = rhs.len() as u32;
+        let rhs_len = rhs.len() as u16;
         let rhs = token_to_packed.get(rhs).unwrap();
 
         let mut lhs = if lhs_len > 1 {
@@ -734,7 +734,7 @@ where
 
         for t in it {
             let rhs = token_to_packed.get(t).unwrap();
-            lhs = borrow_lhs.intersect::<I>(*rhs, t.len() as u32, stats);
+            lhs = borrow_lhs.intersect::<I>(*rhs, t.len() as u16, stats);
             borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
         }
 
