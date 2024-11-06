@@ -5,24 +5,22 @@
 #![feature(pointer_is_aligned_to)]
 #![feature(allocator_api)]
 #![feature(iter_intersperse)]
+#![feature(new_zeroed_alloc)]
 
 use ahash::AHashSet;
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use heed::{DatabaseFlags, EnvFlags, EnvOpenOptions};
 use hyperloglogplus::HyperLogLog;
-use phrase_search::{naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, CommonTokens, Indexer, Searcher, Stats};
+use memmap2::Mmap;
+use phrase_search::{naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, Aligned64, BorrowRoaringishPacked, RoaringishPacked, CommonTokens, Indexer, Searcher, Stats, DB};
 use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 use std::{
-    alloc::{alloc, dealloc, Allocator},
-    fmt::Debug,
-    fs::File,
-    io::{BufRead, BufReader},
-    path::PathBuf,
-    ptr::NonNull, time::Duration,
+    alloc::{alloc, dealloc, Allocator}, fmt::Debug, fs::File, io::{BufRead, BufReader}, path::PathBuf, ptr::NonNull, simd::Simd, str::FromStr, time::Duration
 };
 
 #[derive(Parser, Debug)]
@@ -221,6 +219,7 @@ fn index_msmarco(args: IndexFile) {
 }
 
 fn main() {
+    //0.0002f64
     let args = CommandArgs::parse();
 
     // spawn rayon threads to avoid unecessary respawn

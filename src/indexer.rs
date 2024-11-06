@@ -11,8 +11,8 @@ use rkyv::{
 use crate::{
     db::{DB, MAX_WINDOW_LEN},
     decreasing_window_iter::DecreasingWindows,
-    roaringish::{RoaringishPacked, MAX_VALUE},
-    utils::{normalize, tokenize},
+    roaringish::MAX_VALUE,
+    utils::{normalize, tokenize}, RoaringishPacked,
 };
 
 #[derive(Debug)]

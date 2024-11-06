@@ -2,7 +2,7 @@ use std::num::NonZero;
 
 use arbitrary::{Arbitrary, Unstructured};
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use phrase_search::{AlignedBorrowRoaringishPacked, AlignedRoaringishPacked};
+use phrase_search::{BorrowRoaringishPacked, RoaringishPacked};
 use rand::{distributions::Standard, Rng, SeedableRng};
 
 fn gen(num_groups: u32, per_group: u32) -> Vec<u32> {
@@ -32,7 +32,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let data: Vec<NonZero<u8>> = (0..262144).into_iter().map(|_| rng.gen()).collect();
                 let data = unsafe { std::mem::transmute::<Vec<NonZero<u8>>, Vec<u8>>(data) };
                 let mut dna = Unstructured::new(&data);
-                if let Ok(p) = AlignedRoaringishPacked::arbitrary(&mut dna) {
+                if let Ok(p) = RoaringishPacked::arbitrary(&mut dna) {
                     if p.len() < 10 {
                         continue;
                     }
@@ -46,7 +46,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let packed: Vec<_> = packed
         .iter()
         .map(|p| {
-            AlignedBorrowRoaringishPacked::new(p)
+            BorrowRoaringishPacked::new(p)
         })
         .collect();
 

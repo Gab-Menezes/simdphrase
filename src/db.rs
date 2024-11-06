@@ -1,11 +1,13 @@
 use std::{
+    borrow::Borrow,
     cmp::Reverse,
-    collections::{BTreeSet, BinaryHeap, HashSet},
+    collections::{BTreeSet, BinaryHeap, HashMap, HashSet},
     fmt::Debug,
     fs::File,
     io::BufWriter,
     num::NonZero,
-    path::Path,
+    path::{Path, PathBuf},
+    str::FromStr,
     sync::atomic::{AtomicU64, Ordering::Relaxed},
     u32,
 };
@@ -26,7 +28,7 @@ use rkyv::{
     tuple::{ArchivedTuple2, ArchivedTuple3},
     util::AlignedVec,
     vec::{ArchivedVec, VecResolver},
-    with::Inline,
+    with::{Inline, InlineAsBox},
     Archive, Archived, Deserialize, Place, Serialize,
 };
 
@@ -35,16 +37,14 @@ use crate::{
     decreasing_window_iter::DecreasingWindows,
     normalize,
     roaringish::{
-        intersect::Intersect, ArchivedRoaringishPacked, RoaringishPacked, RoaringishPackedKind,
-        RoaringishPackedResolver,
+        intersect::Intersect, Aligned, ArchivedBorrowRoaringishPacked, RoaringishPackedKind,
+        Unaligned,
     },
-    tokenize, AlignedBorrowRoaringishPacked,
+    tokenize, BorrowRoaringishPacked, RoaringishPacked,
 };
 
 #[derive(Archive, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct BorrowBoxStr<'a>(#[rkyv(with = Inline)] &'a Box<str>);
-#[derive(Archive, Serialize)]
-struct BorrowRoaringishPacked<'a>(#[rkyv(with = Inline)] &'a RoaringishPacked);
+struct BorrowStr<'a>(#[rkyv(with = InlineAsBox)] &'a str);
 
 mod db_constants {
     pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
@@ -82,7 +82,7 @@ impl Debug for Stats {
             + self.add_rhs.load(Relaxed);
 
         let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let merge = self.merge.load(Relaxed) as f64 / sum as f64  * 100f64;
+        let merge = self.merge.load(Relaxed) as f64 / sum as f64 * 100f64;
         let binary_search = self.binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
         let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
         let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
@@ -261,7 +261,7 @@ where
             .map(|(token, token_id)| {
                 let packed = &token_id_to_roaringish_packed[*token_id as usize];
                 *mmap_size += packed.size_bytes();
-                (BorrowBoxStr(token), BorrowRoaringishPacked(packed))
+                (BorrowStr(token), BorrowRoaringishPacked::new(packed))
             })
             .collect();
         token_to_packed.sort_unstable_by(|(token0, _), (token1, _)| token0.cmp(token1));
@@ -331,7 +331,9 @@ where
         let files_data: Vec<_> = files_mmaps
             .iter()
             .map(|mmap| unsafe {
-                rkyv::access_unchecked::<Archived<Vec<(Box<str>, RoaringishPacked)>>>(mmap)
+                rkyv::access_unchecked::<
+                    Archived<Vec<(BorrowStr<'_>, BorrowRoaringishPacked<'_, Unaligned>)>>,
+                >(mmap)
             })
             .collect();
         let mut iters: Vec<_> = files_data
@@ -340,19 +342,19 @@ where
             .collect();
 
         struct ToMerge<'a> {
-            token: &'a ArchivedBox<str>,
-            packed: &'a ArchivedRoaringishPacked,
+            token: &'a ArchivedBorrowStr<'a>,
+            packed: &'a ArchivedBorrowRoaringishPacked<'a, Unaligned>,
             i: usize,
         }
         impl<'a> PartialEq for ToMerge<'a> {
             fn eq(&self, other: &Self) -> bool {
-                self.token == other.token && self.i == other.i
+                self.token.0 == other.token.0 && self.i == other.i
             }
         }
         impl<'a> Eq for ToMerge<'a> {}
         impl<'a> PartialOrd for ToMerge<'a> {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                match self.token.partial_cmp(other.token) {
+                match self.token.0.partial_cmp(&other.token.0) {
                     Some(std::cmp::Ordering::Equal) => self.i.partial_cmp(&other.i),
                     ord => ord,
                 }
@@ -360,7 +362,7 @@ where
         }
         impl<'a> Ord for ToMerge<'a> {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                match self.token.cmp(other.token) {
+                match self.token.0.cmp(&other.token.0) {
                     std::cmp::Ordering::Equal => self.i.cmp(&other.i),
                     ord => ord,
                 }
@@ -389,13 +391,13 @@ where
                 }));
             }
 
-            let mut packed_kind = RoaringishPackedKind::Archived(&to_merge.packed);
+            let mut packed_kind = RoaringishPackedKind::Archived(to_merge.packed);
             loop {
                 let Some(next_to_merge) = heap.peek() else {
                     break;
                 };
 
-                if next_to_merge.0.token != to_merge.token {
+                if next_to_merge.0.token.0 != to_merge.token.0 {
                     break;
                 }
 
@@ -412,7 +414,7 @@ where
                 packed_kind = packed_kind.concat(next_to_merge_kind);
             }
 
-            if to_merge.token.len() > 511 {
+            if to_merge.token.0.len() > 511 {
                 continue;
             }
 
@@ -427,10 +429,18 @@ where
                     values_len: values_len as u64,
                 }
             };
-
             self.db_token_to_offsets
-                .put_with_flags(rwtxn, PutFlags::APPEND, to_merge.token, &offset)
+                .put_with_flags(rwtxn, PutFlags::APPEND, &to_merge.token.0, &offset)
                 .unwrap();
+        }
+
+        drop(iters);
+        drop(files_data);
+        drop(files_mmaps);
+
+        for i in 0..number_of_batches {
+            let file_name = format!("{}_{i}", db_constants::TEMP_FILE_TOKEN_TO_PACKED);
+            std::fs::remove_file(self.env.path().join(file_name)).unwrap();
         }
     }
 
@@ -508,7 +518,10 @@ where
         tokens: &'b [&'c str],
         common_tokens: &HashSet<Box<str>>,
         mmap: &'a Mmap,
-    ) -> (Vec<&'b [&'c str]>, AHashMap<&'b [&'c str], AlignedBorrowRoaringishPacked<'a>>) {
+    ) -> (
+        Vec<&'b [&'c str]>,
+        AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
+    ) {
         // TODO: improve this, temporary code just to make sure things working
         // maybe use smallvec ?
         fn inner_merge_and_minimize_tokens<'a, 'b, 'c, D>(
@@ -516,14 +529,14 @@ where
             rotxn: &RoTxn,
             tokens: &'b [&'c str],
             common_tokens: &HashSet<Box<str>>,
-            token_to_packed: &mut AHashMap<&'b [&'c str], AlignedBorrowRoaringishPacked<'a>>,
+            token_to_packed: &mut AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
             mmap: &'a Mmap,
             memo_token_to_score_choices: &mut AHashMap<&'b [&'c str], (usize, Vec<&'b [&'c str]>)>,
         ) -> usize
         where
             D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
                 + Archive
-                + 'static
+                + 'static,
         {
             if let Some(r) = memo_token_to_score_choices.get(tokens) {
                 return r.0;
@@ -533,16 +546,17 @@ where
                 let score = match token_to_packed.get(tokens) {
                     Some(packed) => packed.doc_id_groups.len(),
                     None => {
-                        let concatened: String = tokens.into_iter().copied().intersperse(" ").collect();
+                        let concatened: String =
+                            tokens.into_iter().copied().intersperse(" ").collect();
                         match me.get_roaringish_packed(rotxn, &concatened, mmap) {
                             Some(packed) => {
                                 let score = packed.doc_id_groups.len();
                                 token_to_packed.insert(tokens, packed);
                                 score
-                            },
+                            }
                             None => return 0,
                         }
-                    },
+                    }
                 };
                 memo_token_to_score_choices.insert(tokens, (score, vec![tokens]));
                 return score;
@@ -552,7 +566,12 @@ where
             let mut choices = Vec::new();
 
             // TODO: fix this, it looks ugly
-            let mut end = tokens[1..].into_iter().take(MAX_WINDOW_LEN.get() - 1).take_while(|t| common_tokens.contains(**t)).count() + 2;
+            let mut end = tokens[1..]
+                .into_iter()
+                .take(MAX_WINDOW_LEN.get() - 1)
+                .take_while(|t| common_tokens.contains(**t))
+                .count()
+                + 2;
             if common_tokens.contains(tokens[0]) {
                 end += 1;
             }
@@ -564,21 +583,30 @@ where
                 let score = match token_to_packed.get(tokens) {
                     Some(packed) => packed.doc_id_groups.len(),
                     None => {
-                        let concatened: String = tokens.into_iter().copied().intersperse(" ").collect();
+                        let concatened: String =
+                            tokens.into_iter().copied().intersperse(" ").collect();
                         match me.get_roaringish_packed(rotxn, &concatened, mmap) {
                             Some(packed) => {
                                 let score = packed.doc_id_groups.len();
                                 token_to_packed.insert(tokens, packed);
                                 score
-                            },
+                            }
                             None => return 0,
                         }
-                    },
+                    }
                 };
 
                 let mut rem_score = 0;
                 if !rem.is_empty() {
-                    rem_score = inner_merge_and_minimize_tokens(me, rotxn, rem, common_tokens, token_to_packed, mmap, memo_token_to_score_choices);
+                    rem_score = inner_merge_and_minimize_tokens(
+                        me,
+                        rotxn,
+                        rem,
+                        common_tokens,
+                        token_to_packed,
+                        mmap,
+                        memo_token_to_score_choices,
+                    );
                     if rem_score == 0 {
                         return 0;
                     }
@@ -607,7 +635,7 @@ where
                     Some(packed) => token_to_packed.insert(tokens, packed),
                     None => return (Vec::new(), AHashMap::new()),
                 };
-                choices.push(&tokens[i..i+1]);
+                choices.push(&tokens[i..i + 1]);
             }
             return (choices, token_to_packed);
         }
@@ -618,9 +646,17 @@ where
         let mut memo_token_to_score_choices = AHashMap::with_capacity(len);
         let mut token_to_packed = AHashMap::with_capacity(len);
 
-        let score = inner_merge_and_minimize_tokens(self, rotxn, tokens, common_tokens, &mut token_to_packed, mmap, &mut memo_token_to_score_choices);
+        let score = inner_merge_and_minimize_tokens(
+            self,
+            rotxn,
+            tokens,
+            common_tokens,
+            &mut token_to_packed,
+            mmap,
+            &mut memo_token_to_score_choices,
+        );
         if score == 0 {
-            return (Vec::new(), AHashMap::new())
+            return (Vec::new(), AHashMap::new());
         }
         match memo_token_to_score_choices.remove(tokens) {
             Some((_, choices)) => (choices, token_to_packed),
@@ -628,15 +664,10 @@ where
         }
     }
 
-    #[inline(always)]
-    pub(crate) fn get_roaringish_packed<'a>(
-        &self,
-        rotxn: &RoTxn,
-        token: &str,
+    pub(crate) fn get_roaringish_packed_from_offset<'a>(
+        offset: &ArchivedOffset,
         mmap: &'a Mmap,
-    ) -> Option<AlignedBorrowRoaringishPacked<'a>> {
-        let offset = self.db_token_to_offsets.get(rotxn, token).unwrap()?;
-
+    ) -> Option<BorrowRoaringishPacked<'a, Aligned>> {
         let begin = offset.begin.to_native() as usize;
         let end = begin + offset.doc_id_group_len.to_native() as usize;
         let (l, doc_id_groups, r) = unsafe { &mmap[begin..end].align_to::<u64>() };
@@ -662,10 +693,18 @@ where
         mmap.advise_range(memmap2::Advice::Sequential, offset_advise, len_advise)
             .unwrap();
 
-        Some(AlignedBorrowRoaringishPacked::new_raw(
-            doc_id_groups,
-            values,
-        ))
+        Some(BorrowRoaringishPacked::new_raw(doc_id_groups, values))
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_roaringish_packed<'a>(
+        &self,
+        rotxn: &RoTxn,
+        token: &str,
+        mmap: &'a Mmap,
+    ) -> Option<BorrowRoaringishPacked<'a, Aligned>> {
+        let offset = self.db_token_to_offsets.get(rotxn, token).unwrap()?;
+        Self::get_roaringish_packed_from_offset(offset, mmap)
     }
 
     pub fn search<I: Intersect>(
@@ -695,7 +734,8 @@ where
         }
 
         let b = std::time::Instant::now();
-        let (final_tokens, token_to_packed) = self.merge_and_minimize_tokens(&rotxn, &tokens, &common_tokens, mmap);
+        let (final_tokens, token_to_packed) =
+            self.merge_and_minimize_tokens(&rotxn, &tokens, &common_tokens, mmap);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
@@ -705,7 +745,10 @@ where
         }
 
         if final_tokens.len() == 1 {
-            return token_to_packed.get(final_tokens.first().unwrap()).unwrap().get_doc_ids();
+            return token_to_packed
+                .get(final_tokens.first().unwrap())
+                .unwrap()
+                .get_doc_ids();
         }
 
         let mut it = final_tokens.iter();
@@ -720,25 +763,25 @@ where
 
         let mut lhs = if lhs_len > 1 {
             let b = std::time::Instant::now();
-            let lhs = lhs + (lhs_len - 1);
+            let lhs = *lhs + (lhs_len - 1);
             stats
                 .add_lhs
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-            let lhs = AlignedBorrowRoaringishPacked::new(&lhs);
+            let lhs = BorrowRoaringishPacked::new(&lhs);
             lhs.intersect::<I>(*rhs, rhs_len, stats)
         } else {
             lhs.intersect::<I>(*rhs, rhs_len, stats)
         };
-        let mut borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
+        let mut borrow_lhs = BorrowRoaringishPacked::new(&lhs);
 
         for t in it {
             let rhs = token_to_packed.get(t).unwrap();
             lhs = borrow_lhs.intersect::<I>(*rhs, t.len() as u16, stats);
-            borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
+            borrow_lhs = BorrowRoaringishPacked::new(&lhs);
         }
 
-        borrow_lhs = AlignedBorrowRoaringishPacked::new(&lhs);
+        borrow_lhs = BorrowRoaringishPacked::new(&lhs);
         borrow_lhs.get_doc_ids()
     }
 }

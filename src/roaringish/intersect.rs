@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 
 use crate::allocator::Aligned64;
 
-use super::AlignedBorrowRoaringishPacked;
+use super::{Aligned, BorrowRoaringishPacked};
 
 pub mod naive;
 pub mod simd;
@@ -15,8 +15,8 @@ mod private {
 
 pub trait Intersect: private::IntersectSeal {
     fn intersect<const FIRST: bool>(
-        lhs: &AlignedBorrowRoaringishPacked,
-        rhs: &AlignedBorrowRoaringishPacked,
+        lhs: BorrowRoaringishPacked<'_, Aligned>,
+        rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> (
         Vec<u64, Aligned64>,
         Vec<u16, Aligned64>,
@@ -75,8 +75,8 @@ pub trait Intersect: private::IntersectSeal {
     }
 
     fn inner_intersect<const FIRST: bool>(
-        lhs: &AlignedBorrowRoaringishPacked,
-        rhs: &AlignedBorrowRoaringishPacked,
+        lhs: BorrowRoaringishPacked<'_, Aligned>,
+        rhs: BorrowRoaringishPacked<'_, Aligned>,
 
         lhs_i: &mut usize,
         rhs_i: &mut usize,
@@ -90,7 +90,7 @@ pub trait Intersect: private::IntersectSeal {
     );
 
     fn intersection_buffer_size(
-        lhs: &AlignedBorrowRoaringishPacked,
-        rhs: &AlignedBorrowRoaringishPacked,
+        lhs: BorrowRoaringishPacked<'_, Aligned>,
+        rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> usize;
 }

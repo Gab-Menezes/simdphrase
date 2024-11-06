@@ -7,8 +7,7 @@ pub fn normalize(s: &str) -> String {
 pub fn tokenize(s: &str) -> impl Iterator<Item = &str> {
     s.split_word_bounds().filter(|t| {
         if !t.is_empty() {
-            let t = t.chars().next().unwrap();
-            return t > ' ';
+            return !t.chars().next().unwrap().is_whitespace();
         }
         false
     })

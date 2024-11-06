@@ -1,7 +1,7 @@
 pub mod intersect;
 
 use arbitrary::{unstructured::ArbitraryIter, Arbitrary, Unstructured};
-use rkyv::{Archive, Serialize};
+use rkyv::{with::{Inline, InlineAsBox, Skip}, Archive, Serialize};
 use std::{
     arch::x86_64::{
         __m256i, __m512i, _mm256_mask_compressstoreu_epi16, _mm512_mask_compressstoreu_epi64,
@@ -9,6 +9,7 @@ use std::{
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
     iter::Take,
+    marker::PhantomData,
     mem::MaybeUninit,
     num::NonZero,
     ops::Add,
@@ -55,10 +56,87 @@ const fn get_group_from_doc_id_group(packed: u64) -> u32 {
     (packed & 0x00000000FFFF) as u32
 }
 
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Archive)]
+pub enum RoaringishPackedKind<'a, A> {
+    Owned(RoaringishPacked),
+    Archived(&'a ArchivedBorrowRoaringishPacked<'a, A>),
+}
+
+impl<'a, A> RoaringishPackedKind<'a, A> {
+    pub fn as_bytes(&self) -> (&[u8], &[u8]) {
+        match self {
+            RoaringishPackedKind::Owned(packed) => unsafe {
+                let (l, doc_id_groups, r) = packed.doc_id_groups.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                let (l, values, r) = packed.values.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                (doc_id_groups, values)
+            },
+            RoaringishPackedKind::Archived(packed) => unsafe {
+                let (l, doc_id_groups, r) = packed.doc_id_groups.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                let (l, values, r) = packed.values.align_to::<u8>();
+                debug_assert!(l.is_empty());
+                debug_assert!(r.is_empty());
+                (doc_id_groups, values)
+            },
+        }
+    }
+
+    pub fn concat<'b: 'a>(self, other: RoaringishPackedKind<'b, A>) -> RoaringishPackedKind<'b, A> {
+        unsafe fn copy_data<T, U>(dest: &mut [MaybeUninit<T>], lhs: &[U], rhs: &[U]) {
+            let (l, buf, r) = dest.align_to_mut::<MaybeUninit<u8>>();
+            debug_assert!(l.is_empty());
+            debug_assert!(r.is_empty());
+
+            let (l, lhs, r) = lhs.align_to::<MaybeUninit<u8>>();
+            debug_assert!(l.is_empty());
+            debug_assert!(r.is_empty());
+
+            let (l, rhs, r) = rhs.align_to::<MaybeUninit<u8>>();
+            debug_assert!(l.is_empty());
+            debug_assert!(r.is_empty());
+
+            buf[0..lhs.len()].copy_from_slice(lhs);
+            buf[lhs.len()..].copy_from_slice(rhs);
+        }
+
+        let r = match (self, other) {
+            (RoaringishPackedKind::Owned(mut lhs), RoaringishPackedKind::Archived(rhs)) => {
+                lhs.doc_id_groups.extend(rhs.doc_id_groups.iter().map(|v| v.to_native()));
+                lhs.values.extend(rhs.values.iter().map(|v| v.to_native()));
+                lhs
+            }
+            (RoaringishPackedKind::Archived(lhs), RoaringishPackedKind::Archived(rhs)) => {
+                let n = lhs.doc_id_groups.len() + rhs.doc_id_groups.len();
+                let mut doc_id_groups: Box<[MaybeUninit<u64>], _> =
+                    Box::new_uninit_slice_in(n, Aligned64::default());
+                let mut values: Box<[MaybeUninit<u16>], _> =
+                    Box::new_uninit_slice_in(n, Aligned64::default());
+
+                unsafe {
+                    copy_data(&mut doc_id_groups, &lhs.doc_id_groups, &rhs.doc_id_groups);
+                    copy_data(&mut values, &lhs.values, &rhs.values);
+                    let (p_doc_id_groups, a0) = Box::into_raw_with_allocator(doc_id_groups);
+                    let (p_values, a1) = Box::into_raw_with_allocator(values);
+                    RoaringishPacked {
+                        doc_id_groups: Vec::from_raw_parts_in(p_doc_id_groups as *mut _, n, n, a0),
+                        values: Vec::from_raw_parts_in(p_values as *mut _, n, n, a1),
+                    }
+                }
+            }
+            _ => panic!("This type of append should never happen"),
+        };
+        RoaringishPackedKind::Owned(r)
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Serialize, Archive)]
 pub struct RoaringishPacked {
-    pub(crate) doc_id_groups: Vec<u64>,
-    pub(crate) values: Vec<u16>,
+    pub doc_id_groups: Vec<u64, Aligned64>,
+    pub values: Vec<u16, Aligned64>,
 }
 
 impl RoaringishPacked {
@@ -111,97 +189,7 @@ impl RoaringishPacked {
     }
 }
 
-pub enum RoaringishPackedKind<'a> {
-    Owned(RoaringishPacked),
-    Archived(&'a ArchivedRoaringishPacked),
-}
-
-impl<'a> RoaringishPackedKind<'a> {
-    pub fn as_bytes(&self) -> (&[u8], &[u8]) {
-        match self {
-            RoaringishPackedKind::Owned(packed) => unsafe {
-                let (l, doc_id_groups, r) = packed.doc_id_groups.align_to::<u8>();
-                debug_assert!(l.is_empty());
-                debug_assert!(r.is_empty());
-                let (l, values, r) = packed.values.align_to::<u8>();
-                debug_assert!(l.is_empty());
-                debug_assert!(r.is_empty());
-                (doc_id_groups, values)
-            },
-            RoaringishPackedKind::Archived(packed) => unsafe {
-                let (l, doc_id_groups, r) = packed.doc_id_groups.align_to::<u8>();
-                debug_assert!(l.is_empty());
-                debug_assert!(r.is_empty());
-                let (l, values, r) = packed.values.align_to::<u8>();
-                debug_assert!(l.is_empty());
-                debug_assert!(r.is_empty());
-                (doc_id_groups, values)
-            },
-        }
-    }
-
-    pub fn concat<'b: 'a>(self, other: RoaringishPackedKind<'b>) -> RoaringishPackedKind<'b> {
-        unsafe fn copy_data<T, U>(dest: &mut [MaybeUninit<T>], lhs: &[U], rhs: &[U]) {
-            let (l, buf, r) = dest.align_to_mut::<MaybeUninit<u8>>();
-            debug_assert!(l.is_empty());
-            debug_assert!(r.is_empty());
-
-            let (l, lhs, r) = lhs.align_to::<MaybeUninit<u8>>();
-            debug_assert!(l.is_empty());
-            debug_assert!(r.is_empty());
-
-            let (l, rhs, r) = rhs.align_to::<MaybeUninit<u8>>();
-            debug_assert!(l.is_empty());
-            debug_assert!(r.is_empty());
-
-            buf[0..lhs.len()].copy_from_slice(lhs);
-            buf[lhs.len()..].copy_from_slice(rhs);
-        }
-
-        let r = match (self, other) {
-            (RoaringishPackedKind::Owned(mut lhs), RoaringishPackedKind::Archived(rhs)) => {
-                lhs.doc_id_groups
-                    .extend(rhs.doc_id_groups.iter().map(|v| v.to_native()));
-                lhs.values.extend(rhs.values.iter().map(|v| v.to_native()));
-                lhs
-            }
-            (RoaringishPackedKind::Archived(lhs), RoaringishPackedKind::Archived(rhs)) => {
-                let n = lhs.doc_id_groups.len() + rhs.doc_id_groups.len();
-                let mut doc_id_groups: Box<[MaybeUninit<u64>]> = Box::new_uninit_slice(n);
-                let mut values: Box<[MaybeUninit<u16>]> = Box::new_uninit_slice(n);
-
-                unsafe {
-                    copy_data(&mut doc_id_groups, &lhs.doc_id_groups, &rhs.doc_id_groups);
-                    copy_data(&mut values, &lhs.values, &rhs.values);
-                    RoaringishPacked {
-                        doc_id_groups: Vec::from_raw_parts(
-                            Box::into_raw(doc_id_groups) as *mut _,
-                            n,
-                            n,
-                        ),
-                        values: Vec::from_raw_parts(Box::into_raw(values) as *mut _, n, n),
-                    }
-                }
-            }
-            _ => panic!("This type of append should never happen"),
-        };
-        RoaringishPackedKind::Owned(r)
-    }
-}
-
-#[derive(PartialEq, Eq, Debug)]
-pub struct AlignedRoaringishPacked {
-    pub doc_id_groups: Vec<u64, Aligned64>,
-    pub values: Vec<u16, Aligned64>,
-}
-
-impl AlignedRoaringishPacked {
-    pub fn len(&self) -> usize {
-        self.doc_id_groups.len()
-    }
-}
-
-impl Default for AlignedRoaringishPacked {
+impl Default for RoaringishPacked {
     fn default() -> Self {
         Self {
             doc_id_groups: Vec::new_in(Aligned64::default()),
@@ -211,16 +199,25 @@ impl Default for AlignedRoaringishPacked {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct AlignedBorrowRoaringishPacked<'a> {
+pub struct Aligned;
+#[derive(Clone, Copy, Debug)]
+pub struct Unaligned;
+
+#[derive(Clone, Copy, Debug, Serialize, Archive)]
+pub struct BorrowRoaringishPacked<'a, A> {
+    #[rkyv(with = InlineAsBox)]
     pub(crate) doc_id_groups: &'a [u64],
+    #[rkyv(with = InlineAsBox)]
     pub(crate) values: &'a [u16],
+    _marker: PhantomData<A>,
 }
 
-impl<'a> AlignedBorrowRoaringishPacked<'a> {
-    pub fn new(packed: &'a AlignedRoaringishPacked) -> Self {
-        AlignedBorrowRoaringishPacked {
+impl<'a> BorrowRoaringishPacked<'a, Aligned> {
+    pub fn new(packed: &'a RoaringishPacked) -> Self {
+        Self {
             doc_id_groups: &packed.doc_id_groups,
             values: &packed.values,
+            _marker: PhantomData,
         }
     }
 
@@ -230,6 +227,7 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
         Self {
             doc_id_groups,
             values,
+            _marker: PhantomData,
         }
     }
 
@@ -237,43 +235,7 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
         Self {
             doc_id_groups: &doc_id_groups,
             values: &[],
-        }
-    }
-
-    pub fn get_doc_ids(&self) -> Vec<u32> {
-        if self.doc_id_groups.is_empty() {
-            return Vec::new();
-        }
-
-        if self.doc_id_groups.len() == 1 {
-            return vec![get_doc_id(self.doc_id_groups[0])];
-        }
-
-        let mut doc_ids: Box<[MaybeUninit<u32>]> = Box::new_uninit_slice(self.doc_id_groups.len());
-        let mut i = 0;
-
-        for [packed0, packed1] in self.doc_id_groups.array_windows::<2>() {
-            let doc_id0 = get_doc_id(*packed0);
-            let doc_id1 = get_doc_id(*packed1);
-            if doc_id0 != doc_id1 {
-                unsafe { doc_ids.get_unchecked_mut(i).write(doc_id0) };
-                i += 1;
-            }
-        }
-
-        unsafe {
-            doc_ids
-                .get_unchecked_mut(i)
-                .write(get_doc_id(*self.doc_id_groups.last().unwrap_unchecked()))
-        };
-        i += 1;
-
-        unsafe {
-            Vec::from_raw_parts(
-                Box::into_raw(doc_ids) as *mut _,
-                i,
-                self.doc_id_groups.len(),
-            )
+            _marker: PhantomData,
         }
     }
 
@@ -282,11 +244,11 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
         mut rhs: Self,
         rhs_len: u16,
         stats: &Stats,
-    ) -> AlignedRoaringishPacked {
+    ) -> RoaringishPacked {
         let mut lhs = self;
 
         if lhs.doc_id_groups.is_empty() || rhs.doc_id_groups.is_empty() {
-            return AlignedRoaringishPacked::default();
+            return RoaringishPacked::default();
         }
 
         let b = std::time::Instant::now();
@@ -299,7 +261,7 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
                 Err(i) => i,
             };
             let aligned_i = i / 8 * 8;
-            rhs = AlignedBorrowRoaringishPacked::new_raw(
+            rhs = BorrowRoaringishPacked::new_raw(
                 &rhs.doc_id_groups[aligned_i..],
                 &rhs.values[aligned_i..],
             );
@@ -309,7 +271,7 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
                 Err(i) => i,
             };
             let aligned_i = i / 8 * 8;
-            lhs = AlignedBorrowRoaringishPacked::new_raw(
+            lhs = BorrowRoaringishPacked::new_raw(
                 &lhs.doc_id_groups[aligned_i..],
                 &lhs.values[aligned_i..],
             );
@@ -319,14 +281,14 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
-        let (doc_id_groups, values_intersect, msb_doc_id_groups) = I::intersect::<true>(&lhs, &rhs);
+        let (doc_id_groups, values_intersect, msb_doc_id_groups) = I::intersect::<true>(lhs, rhs);
         stats
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = AlignedBorrowRoaringishPacked::new_doc_id_groups(&msb_doc_id_groups);
+        let msb_packed = BorrowRoaringishPacked::new_doc_id_groups(&msb_doc_id_groups);
         let b = std::time::Instant::now();
-        let (msb_doc_id_groups, msb_values_intersect, _) = I::intersect::<false>(&msb_packed, &rhs);
+        let (msb_doc_id_groups, msb_values_intersect, _) = I::intersect::<false>(msb_packed, rhs);
         stats
             .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
@@ -427,15 +389,15 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
 
             let (p_values, a1) = Box::into_raw_with_allocator(r_values);
             let values = Vec::from_raw_parts_in(p_values as *mut _, r_i, capacity, a1);
-            AlignedRoaringishPacked {
+            RoaringishPacked {
                 doc_id_groups,
                 values,
             }
         };
         if rhs_len > 1 {
             let b = std::time::Instant::now();
-            let borrow = AlignedBorrowRoaringishPacked::new(&packed);
-            let r = &borrow + (rhs_len - 1);
+            let borrow = BorrowRoaringishPacked::new(&packed);
+            let r = borrow + (rhs_len - 1);
             stats
                 .add_rhs
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
@@ -446,8 +408,47 @@ impl<'a> AlignedBorrowRoaringishPacked<'a> {
     }
 }
 
-impl<'a> Add<u16> for &AlignedBorrowRoaringishPacked<'a> {
-    type Output = AlignedRoaringishPacked;
+impl<'a, A> BorrowRoaringishPacked<'a, A> {
+    pub fn get_doc_ids(&self) -> Vec<u32> {
+        if self.doc_id_groups.is_empty() {
+            return Vec::new();
+        }
+
+        if self.doc_id_groups.len() == 1 {
+            return vec![get_doc_id(self.doc_id_groups[0])];
+        }
+
+        let mut doc_ids: Box<[MaybeUninit<u32>]> = Box::new_uninit_slice(self.doc_id_groups.len());
+        let mut i = 0;
+
+        for [packed0, packed1] in self.doc_id_groups.array_windows::<2>() {
+            let doc_id0 = get_doc_id(*packed0);
+            let doc_id1 = get_doc_id(*packed1);
+            if doc_id0 != doc_id1 {
+                unsafe { doc_ids.get_unchecked_mut(i).write(doc_id0) };
+                i += 1;
+            }
+        }
+
+        unsafe {
+            doc_ids
+                .get_unchecked_mut(i)
+                .write(get_doc_id(*self.doc_id_groups.last().unwrap_unchecked()))
+        };
+        i += 1;
+
+        unsafe {
+            Vec::from_raw_parts(
+                Box::into_raw(doc_ids) as *mut _,
+                i,
+                self.doc_id_groups.len(),
+            )
+        }
+    }
+}
+
+impl<'a, A> Add<u16> for BorrowRoaringishPacked<'a, A> {
+    type Output = RoaringishPacked;
 
     fn add(self, rhs: u16) -> Self::Output {
         // Right now we only allow values to jump up to 1 group
@@ -467,7 +468,7 @@ impl<'a> Add<u16> for &AlignedBorrowRoaringishPacked<'a> {
 
         let mut it = self.doc_id_groups.iter().zip(self.values.iter());
         let Some((doc_id_group, packed_values)) = it.next() else {
-            return AlignedRoaringishPacked::default();
+            return RoaringishPacked::default();
         };
 
         let new_values = packed_values.rotate_left(rhs as u32);
@@ -522,7 +523,7 @@ impl<'a> Add<u16> for &AlignedBorrowRoaringishPacked<'a> {
         }
 
         unsafe {
-            AlignedRoaringishPacked {
+            RoaringishPacked {
                 doc_id_groups: Vec::from_raw_parts_in(
                     Box::into_raw(doc_id_groups) as *mut _,
                     i,
@@ -1301,7 +1302,7 @@ impl<'a> Add<u16> for &AlignedBorrowRoaringishPacked<'a> {
 //     }
 // }
 
-impl Binary for AlignedRoaringishPacked {
+impl Binary for RoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut list = f.debug_list();
         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
@@ -1318,7 +1319,7 @@ impl Binary for AlignedRoaringishPacked {
     }
 }
 
-impl<'a> Binary for AlignedBorrowRoaringishPacked<'a> {
+impl<'a, A> Binary for BorrowRoaringishPacked<'a, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut list = f.debug_list();
         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
@@ -1385,7 +1386,7 @@ impl<'a> Binary for AlignedBorrowRoaringishPacked<'a> {
 //     }
 // }
 
-impl Display for AlignedRoaringishPacked {
+impl Display for RoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let it = self.doc_id_groups.iter().zip(self.values.iter()).flat_map(
             |(doc_id_group, encoded_values)| {
@@ -1401,7 +1402,7 @@ impl Display for AlignedRoaringishPacked {
     }
 }
 
-impl<'a> Display for AlignedBorrowRoaringishPacked<'a> {
+impl<'a, A> Display for BorrowRoaringishPacked<'a, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let it = self.doc_id_groups.iter().zip(self.values.iter()).flat_map(
             |(doc_id_group, encoded_values)| {
@@ -1417,7 +1418,7 @@ impl<'a> Display for AlignedBorrowRoaringishPacked<'a> {
     }
 }
 
-impl<'a> Arbitrary<'a> for AlignedRoaringishPacked {
+impl<'a> Arbitrary<'a> for RoaringishPacked {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         let len = u.arbitrary_len::<(u64, NonZero<u16>)>()?;
 

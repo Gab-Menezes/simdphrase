@@ -7,10 +7,11 @@ use std::{
     simd::{cmp::SimdPartialOrd, Simd},
 };
 
-use crate::roaringish::{AlignedBorrowRoaringishPacked, Aligned64};
+use crate::roaringish::{BorrowRoaringishPacked, Aligned64};
 
 use super::naive::NaiveIntersect;
 use super::{private::IntersectSeal, Intersect};
+use crate::roaringish::Aligned;
 
 #[cfg(all(
     target_feature = "avx512f",
@@ -208,8 +209,8 @@ impl Intersect for SimdIntersect {
         target_feature = "avx512dq",
     ))]
     fn inner_intersect<const FIRST: bool>(
-        lhs: &AlignedBorrowRoaringishPacked,
-        rhs: &AlignedBorrowRoaringishPacked,
+        lhs: BorrowRoaringishPacked<'_, Aligned>,
+        rhs: BorrowRoaringishPacked<'_, Aligned>,
 
         lhs_i: &mut usize,
         rhs_i: &mut usize,
@@ -336,8 +337,8 @@ impl Intersect for SimdIntersect {
         target_feature = "avx512dq",
     )))]
     fn inner_intersect<const FIRST: bool>(
-        lhs: &AlignedBorrowRoaringishPacked,
-        rhs: &AlignedBorrowRoaringishPacked,
+        lhs: BorrowRoaringishPacked<'_, Aligned>,
+        rhs: BorrowRoaringishPacked<'_, Aligned>,
 
         lhs_i: &mut usize,
         rhs_i: &mut usize,
@@ -469,8 +470,8 @@ impl Intersect for SimdIntersect {
     }
 
     fn intersection_buffer_size(
-        lhs: &AlignedBorrowRoaringishPacked,
-        rhs: &AlignedBorrowRoaringishPacked,
+        lhs: BorrowRoaringishPacked<'_, Aligned>,
+        rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> usize {
         lhs.doc_id_groups.len().min(rhs.doc_id_groups.len()) + 1 + N
     }
