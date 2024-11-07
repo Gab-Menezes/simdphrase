@@ -220,7 +220,12 @@ impl Intersect for SimdIntersect {
         i: &mut usize,
 
         msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        msb_values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
         j: &mut usize,
+
+        lhs_len: u16,
+        msb_mask: u16,
+        lsb_mask: u16
     ) {
         use std::arch::x86_64::{
             _mm512_load_epi64, _mm512_mask_compressstoreu_epi64, _mm_load_si128,
@@ -321,11 +326,18 @@ impl Intersect for SimdIntersect {
             rhs,
             lhs_i,
             rhs_i,
+
             doc_id_groups_result,
             values_result,
             i,
+
             msb_doc_id_groups_result,
+            msb_values_result,
             j,
+
+            lhs_len,
+            msb_mask,
+            lsb_mask
         );
     }
 
@@ -348,7 +360,12 @@ impl Intersect for SimdIntersect {
         i: &mut usize,
 
         msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        msb_values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
         j: &mut usize,
+
+        lhs_len: u16,
+        msb_mask: u16,
+        lsb_mask: u16
     ) {
         use std::arch::x86_64::_mm256_load_si256;
 
@@ -461,11 +478,18 @@ impl Intersect for SimdIntersect {
             rhs,
             lhs_i,
             rhs_i,
+
             doc_id_groups_result,
             values_result,
             i,
+
             msb_doc_id_groups_result,
+            msb_values_result,
             j,
+
+            lhs_len,
+            msb_mask,
+            lsb_mask
         );
     }
 

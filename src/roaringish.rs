@@ -231,10 +231,10 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         }
     }
 
-    pub fn new_doc_id_groups(doc_id_groups: &'a Vec<u64, Aligned64>) -> Self {
+    pub fn new_aligned(doc_id_groups: &'a Vec<u64, Aligned64>, values: &'a Vec<u16, Aligned64>) -> Self {
         Self {
             doc_id_groups: &doc_id_groups,
-            values: &[],
+            values: values,
             _marker: PhantomData,
         }
     }
@@ -242,7 +242,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     pub fn intersect<I: Intersect>(
         self,
         mut rhs: Self,
-        rhs_len: u16,
+        lhs_len: u16,
         stats: &Stats,
     ) -> RoaringishPacked {
         let mut lhs = self;
@@ -281,14 +281,14 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
-        let (doc_id_groups, values_intersect, msb_doc_id_groups) = I::intersect::<true>(lhs, rhs);
+        let (doc_id_groups, values_intersect, msb_doc_id_groups, msb_values) = I::intersect::<true>(lhs, rhs, lhs_len);
         stats
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = BorrowRoaringishPacked::new_doc_id_groups(&msb_doc_id_groups);
+        let msb_packed = BorrowRoaringishPacked::new_aligned(&msb_doc_id_groups, &msb_values);
         let b = std::time::Instant::now();
-        let (msb_doc_id_groups, msb_values_intersect, _) = I::intersect::<false>(msb_packed, rhs);
+        let (msb_doc_id_groups, msb_values_intersect, _, _) = I::intersect::<false>(msb_packed, rhs, lhs_len);
         stats
             .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
@@ -394,17 +394,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
                 values,
             }
         };
-        if rhs_len > 1 {
-            let b = std::time::Instant::now();
-            let borrow = BorrowRoaringishPacked::new(&packed);
-            let r = borrow + (rhs_len - 1);
-            stats
-                .add_rhs
-                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-            r
-        } else {
-            packed
-        }
+        packed
     }
 }
 

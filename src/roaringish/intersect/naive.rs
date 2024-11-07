@@ -20,7 +20,12 @@ impl Intersect for NaiveIntersect {
         i: &mut usize,
 
         msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        msb_values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
         j: &mut usize,
+
+        lhs_len: u16,
+        msb_mask: u16,
+        lsb_mask: u16
     ) {
         while *lhs_i < lhs.doc_id_groups.len() && *rhs_i < rhs.doc_id_groups.len() {
             let lhs_doc_id_groups = unsafe { *lhs.doc_id_groups.get_unchecked(*lhs_i) };
@@ -31,17 +36,25 @@ impl Intersect for NaiveIntersect {
                     doc_id_groups_result
                         .get_unchecked_mut(*i)
                         .write(lhs_doc_id_groups);
-                    let rhs = *rhs.values.get_unchecked(*rhs_i);
-                    if FIRST {
-                        let lhs = *lhs.values.get_unchecked(*lhs_i);
-                        values_result.get_unchecked_mut(*i).write((lhs << 1) & rhs);
 
+                    let lhs_values = *lhs.values.get_unchecked(*lhs_i);
+                    let rhs_values = *rhs.values.get_unchecked(*rhs_i);
+                    if FIRST {
+                        values_result.get_unchecked_mut(*i).write((lhs_values << lhs_len) & rhs_values);
+
+                        // TODO: this sucks
                         msb_doc_id_groups_result
                             .get_unchecked_mut(*j)
                             .write(lhs_doc_id_groups + 1);
-                        *j += (lhs & 0x8000 > 1) as usize;
+                        msb_values_result
+                            .get_unchecked_mut(*j)
+                            .write(lhs_values);
+                        *j += (lhs_values & msb_mask > 1) as usize;
                     } else {
-                        values_result.get_unchecked_mut(*i).write(1 & rhs);
+                        values_result.get_unchecked_mut(*i)
+                        .write(
+                            (lhs_values.rotate_left(lhs_len as u32) & lsb_mask) & rhs_values
+                        );
                     }
                 }
                 *i += 1;
@@ -52,11 +65,14 @@ impl Intersect for NaiveIntersect {
             } else {
                 if FIRST {
                     unsafe {
-                        let lhs = *lhs.values.get_unchecked(*lhs_i);
+                        let lhs_values = *lhs.values.get_unchecked(*lhs_i);
                         msb_doc_id_groups_result
                             .get_unchecked_mut(*j)
                             .write(lhs_doc_id_groups + 1);
-                        *j += (lhs & 0x8000 > 1) as usize;
+                        msb_values_result
+                            .get_unchecked_mut(*j)
+                            .write(lhs_values);
+                        *j += (lhs_values & msb_mask > 1) as usize;
                     }
                 }
                 *lhs_i += 1;

@@ -664,7 +664,7 @@ where
         }
     }
 
-    pub(crate) fn get_roaringish_packed_from_offset<'a>(
+    fn get_roaringish_packed_from_offset<'a>(
         offset: &ArchivedOffset,
         mmap: &'a Mmap,
     ) -> Option<BorrowRoaringishPacked<'a, Aligned>> {
@@ -761,24 +761,15 @@ where
         let rhs_len = rhs.len() as u16;
         let rhs = token_to_packed.get(rhs).unwrap();
 
-        let mut lhs = if lhs_len > 1 {
-            let b = std::time::Instant::now();
-            let lhs = *lhs + (lhs_len - 1);
-            stats
-                .add_lhs
-                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-            let lhs = BorrowRoaringishPacked::new(&lhs);
-            lhs.intersect::<I>(*rhs, rhs_len, stats)
-        } else {
-            lhs.intersect::<I>(*rhs, rhs_len, stats)
-        };
+        let mut lhs = lhs.intersect::<I>(*rhs, lhs_len, stats);
         let mut borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+        let mut lhs_len = rhs_len;
 
         for t in it {
             let rhs = token_to_packed.get(t).unwrap();
-            lhs = borrow_lhs.intersect::<I>(*rhs, t.len() as u16, stats);
+            lhs = borrow_lhs.intersect::<I>(*rhs, lhs_len, stats);
             borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+            lhs_len = t.len() as u16;
         }
 
         borrow_lhs = BorrowRoaringishPacked::new(&lhs);

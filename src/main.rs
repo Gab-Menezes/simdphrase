@@ -79,7 +79,7 @@ where
         + Archive
         + 'static,
 {
-    type Intersect = SimdIntersect;
+    type Intersect = NaiveIntersect;
     let b = std::time::Instant::now();
 
     let searcher = Searcher::<D>::new(&args.index_name, args.db_size).unwrap();
