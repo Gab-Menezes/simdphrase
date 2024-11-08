@@ -146,13 +146,15 @@ unsafe fn analyze_msb(
     a_values: &[u16],
     lhs_i: usize,
     msb_doc_id_groups_result: &mut [MaybeUninit<u64>],
+    msb_values_result: &mut [MaybeUninit<u16>],
     j: &mut usize,
+    msb_mask: Simd::<u16, N>
 ) {
-    use std::arch::x86_64::{_mm512_mask_compressstoreu_epi64, _mm_loadu_epi16};
+    use std::arch::x86_64::{_mm512_mask_compressstoreu_epi64, _mm_mask_compressstoreu_epi16, _mm_loadu_epi16};
 
-    let vvalues: Simd<u16, N> =
+    let values: Simd<u16, N> =
         unsafe { _mm_loadu_epi16(a_values.as_ptr().add(lhs_i) as *const _).into() };
-    let vmsb_set = (vvalues & Simd::splat(0x8000)).simd_gt(Simd::splat(0));
+    let vmsb_set = (values & msb_mask).simd_gt(Simd::splat(0));
 
     let mask = vmsb_set.to_bitmask() as u8;
     let va: Simd<u64, N> = va.into();
@@ -163,6 +165,11 @@ unsafe fn analyze_msb(
             msb_doc_id_groups_result.as_mut_ptr().add(*j) as *mut _,
             mask,
             doc_id_groups_plus_one.into(),
+        );
+        _mm_mask_compressstoreu_epi16(
+            msb_values_result.as_mut_ptr().add(*j) as *mut _,
+            mask,
+            values.into(),
         );
     }
     *j += mask.count_ones() as usize;
@@ -197,6 +204,15 @@ unsafe fn analyze_msb(
     }
 }
 
+#[inline(always)]
+fn rotl_u16(a: Simd<u16, N>, i: u16) -> Simd<u16, N> {
+    const M: u16 = 16;
+    let i = i % M;
+    let p0 = a << i;
+    let p1 = a >> (M - i);
+    p0 | p1
+}
+
 pub struct SimdIntersect;
 impl IntersectSeal for SimdIntersect {}
 
@@ -208,6 +224,7 @@ impl Intersect for SimdIntersect {
         target_feature = "avx512vbmi2",
         target_feature = "avx512dq",
     ))]
+    #[inline(always)]
     fn inner_intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
@@ -232,23 +249,20 @@ impl Intersect for SimdIntersect {
             _mm_maskz_compress_epi16, _mm_storeu_epi16,
         };
 
+        let simd_msb_mask = Simd::splat(msb_mask);
+        let simd_lsb_mask = Simd::splat(lsb_mask);
+
         let end_lhs = lhs.doc_id_groups.len() / N * N;
         let end_rhs = rhs.doc_id_groups.len() / N * N;
         let a = unsafe { lhs.doc_id_groups.get_unchecked(..end_lhs) };
         let b = unsafe { rhs.doc_id_groups.get_unchecked(..end_rhs) };
-        let a_values = if FIRST {
-            unsafe { lhs.values.get_unchecked(..end_lhs) }
-        } else {
-            &lhs.values
-        };
+        let a_values = unsafe { lhs.values.get_unchecked(..end_lhs) };
         let b_values = unsafe { rhs.values.get_unchecked(..end_rhs) };
         let mut need_to_analyze_msb = false;
-        unsafe {
-            assume(a.len() % N == 0);
-            assume(b.len() % N == 0);
-            assume(a_values.len() % N == 0);
-            assume(b_values.len() % N == 0);
-        }
+        assert_eq!(a.len() % N, 0);
+        assert_eq!(b.len() % N, 0);
+        assert_eq!(a_values.len() % N, 0);
+        assert_eq!(b_values.len() % N, 0);
 
         while *lhs_i < a.len() && *rhs_i < b.len() {
             let (va, vb) = unsafe {
@@ -267,6 +281,11 @@ impl Intersect for SimdIntersect {
                     va,
                 );
 
+                let va_values: Simd<u16, N> = _mm_maskz_compress_epi16(
+                    mask_a,
+                    _mm_load_si128(a_values.as_ptr().add(*lhs_i) as *const _),
+                )
+                .into();
                 let vb_values: Simd<u16, N> = _mm_maskz_compress_epi16(
                     mask_b,
                     _mm_load_si128(b_values.as_ptr().add(*rhs_i) as *const _),
@@ -274,20 +293,14 @@ impl Intersect for SimdIntersect {
                 .into();
 
                 if FIRST {
-                    let va_values: Simd<u16, N> = _mm_maskz_compress_epi16(
-                        mask_a,
-                        _mm_load_si128(a_values.as_ptr().add(*lhs_i) as *const _),
-                    )
-                    .into();
-
                     _mm_storeu_epi16(
                         values_result.as_mut_ptr().add(*i) as *mut _,
-                        ((va_values << 1) & vb_values).into(),
+                        ((va_values << lhs_len) & vb_values).into(),
                     );
                 } else {
                     _mm_storeu_epi16(
                         values_result.as_mut_ptr().add(*i) as *mut _,
-                        (Simd::splat(1) & vb_values).into(),
+                        (rotl_u16(va_values, lhs_len) & simd_lsb_mask & vb_values).into(),
                     );
                 }
 
@@ -300,7 +313,7 @@ impl Intersect for SimdIntersect {
             if FIRST {
                 if last_a <= last_b {
                     unsafe {
-                        analyze_msb(va, a_values, *lhs_i, msb_doc_id_groups_result, j);
+                        analyze_msb(va, a_values, *lhs_i, msb_doc_id_groups_result, msb_values_result, j, simd_msb_mask);
                     }
                     *lhs_i += N;
                 }
@@ -317,7 +330,7 @@ impl Intersect for SimdIntersect {
         {
             unsafe {
                 let va = _mm512_load_epi64(a.as_ptr().add(*lhs_i) as *const _);
-                analyze_msb(va, a_values, *lhs_i, msb_doc_id_groups_result, j);
+                analyze_msb(va, a_values, *lhs_i, msb_doc_id_groups_result, msb_values_result, j, simd_msb_mask);
             };
         }
 
@@ -373,19 +386,14 @@ impl Intersect for SimdIntersect {
         let end_rhs = rhs.doc_id_groups.len() / N * N;
         let a = unsafe { lhs.doc_id_groups.get_unchecked(..end_lhs) };
         let b = unsafe { rhs.doc_id_groups.get_unchecked(..end_rhs) };
-        let a_values = if FIRST {
-            unsafe { lhs.values.get_unchecked(..end_lhs) }
-        } else {
-            &lhs.values
-        };
+        let a_values = unsafe { lhs.values.get_unchecked(..end_lhs) };
         let b_values = unsafe { rhs.values.get_unchecked(..end_rhs) };
         let mut need_to_analyze_msb = false;
-        unsafe {
-            assume(a.len() % N == 0);
-            assume(b.len() % N == 0);
-            assume(a_values.len() % N == 0);
-            assume(b_values.len() % N == 0);
-        }
+
+        assert_eq!(a.len() % N, 0);
+        assert_eq!(b.len() % N, 0);
+        assert_eq!(a_values.len() % N, 0);
+        assert_eq!(b_values.len() % N, 0);
 
         while *lhs_i < a.len() && *rhs_i < b.len() {
             let (va, vb) = unsafe {

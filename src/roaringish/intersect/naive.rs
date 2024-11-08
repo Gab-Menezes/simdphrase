@@ -8,6 +8,7 @@ pub struct NaiveIntersect;
 impl IntersectSeal for NaiveIntersect {}
 
 impl Intersect for NaiveIntersect {
+    #[inline(always)]
     fn inner_intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
@@ -53,7 +54,7 @@ impl Intersect for NaiveIntersect {
                     } else {
                         values_result.get_unchecked_mut(*i)
                         .write(
-                            (lhs_values.rotate_left(lhs_len as u32) & lsb_mask) & rhs_values
+                            lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values
                         );
                     }
                 }

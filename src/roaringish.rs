@@ -443,10 +443,7 @@ impl<'a, A> Add<u16> for BorrowRoaringishPacked<'a, A> {
     fn add(self, rhs: u16) -> Self::Output {
         // Right now we only allow values to jump up to 1 group
         assert!(rhs <= 15);
-
-        unsafe {
-            assume(self.doc_id_groups.len() == self.values.len());
-        }
+        assert_eq!(self.doc_id_groups.len(), self.values.len());
 
         let n = self.doc_id_groups.len() * 2;
         let mut doc_id_groups = Box::new_uninit_slice_in(n, Aligned64::default());
