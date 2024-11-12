@@ -28,8 +28,18 @@ mod decreasing_window_iter;
 pub use db::{Stats, DB};
 pub use indexer::Indexer;
 pub use indexer::CommonTokens;
+
 pub use roaringish::intersect::naive;
+
+// #[cfg(all(
+//     target_feature = "avx512f",
+//     target_feature = "avx512bw",
+//     target_feature = "avx512vl",
+//     target_feature = "avx512vbmi2",
+//     target_feature = "avx512dq",
+// ))]
 pub use roaringish::intersect::simd;
+
 pub use roaringish::intersect::Intersect;
 pub use roaringish::RoaringishPacked;
 pub use roaringish::BorrowRoaringishPacked;
