@@ -162,8 +162,7 @@ impl Debug for Stats {
 #[derive(Debug, Serialize, Archive)]
 struct Offset {
     begin: u64,
-    doc_id_group_len: u64,
-    values_len: u64,
+    len: u64,
 }
 
 pub struct DB<D>
@@ -291,18 +290,19 @@ where
             mmap: &mut MmapMut,
             mmap_offset: &mut usize,
             bytes: &[u8],
-        ) -> (usize, usize) {
+        ) -> Offset {
             let ptr = mmap.as_ptr().add(*mmap_offset);
             let offset = ptr.align_offset(N);
-            if *mmap_offset + offset >= mmap.len() {
-                panic!("We fucked up, writing out of bounds");
-            }
+
             *mmap_offset += offset;
             mmap[*mmap_offset..*mmap_offset + bytes.len()].copy_from_slice(bytes);
 
             let begin = *mmap_offset;
             *mmap_offset += bytes.len();
-            (begin, bytes.len())
+            Offset {
+                begin: begin as u64,
+                len: bytes.len() as u64,
+            }
         }
 
         let file = File::options()
@@ -312,7 +312,7 @@ where
             .write(true)
             .open(self.env.path().join(db_constants::FILE_ROARINGISH_PACKED))
             .unwrap();
-        file.set_len(mmap_size as u64 + (number_of_distinct_tokens * (64 + 16)))
+        file.set_len(mmap_size as u64 + (number_of_distinct_tokens * 64))
             .unwrap();
         let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         let mut mmap_offset = 0;
@@ -418,17 +418,8 @@ where
                 continue;
             }
 
-            let (doc_id_groups, values) = packed_kind.as_bytes();
-            let offset = unsafe {
-                let (begin, doc_id_group_len) =
-                    write_to_mmap::<64>(&mut mmap, &mut mmap_offset, doc_id_groups);
-                let (_, values_len) = write_to_mmap::<16>(&mut mmap, &mut mmap_offset, values);
-                Offset {
-                    begin: begin as u64,
-                    doc_id_group_len: doc_id_group_len as u64,
-                    values_len: values_len as u64,
-                }
-            };
+            let packed = packed_kind.as_bytes();
+            let offset = unsafe { write_to_mmap::<64>(&mut mmap, &mut mmap_offset, packed) };
             self.db_token_to_offsets
                 .put_with_flags(rwtxn, PutFlags::APPEND, &to_merge.token.0, &offset)
                 .unwrap();
@@ -544,13 +535,13 @@ where
 
             if tokens.len() == 1 {
                 let score = match token_to_packed.get(tokens) {
-                    Some(packed) => packed.doc_id_groups.len(),
+                    Some(packed) => packed.len(),
                     None => {
                         let concatened: String =
                             tokens.into_iter().copied().intersperse(" ").collect();
                         match me.get_roaringish_packed(rotxn, &concatened, mmap) {
                             Some(packed) => {
-                                let score = packed.doc_id_groups.len();
+                                let score = packed.len();
                                 token_to_packed.insert(tokens, packed);
                                 score
                             }
@@ -581,13 +572,13 @@ where
                 let (tokens, rem) = tokens.split_at(i);
 
                 let score = match token_to_packed.get(tokens) {
-                    Some(packed) => packed.doc_id_groups.len(),
+                    Some(packed) => packed.len(),
                     None => {
                         let concatened: String =
                             tokens.into_iter().copied().intersperse(" ").collect();
                         match me.get_roaringish_packed(rotxn, &concatened, mmap) {
                             Some(packed) => {
-                                let score = packed.doc_id_groups.len();
+                                let score = packed.len();
                                 token_to_packed.insert(tokens, packed);
                                 score
                             }
@@ -669,31 +660,16 @@ where
         mmap: &'a Mmap,
     ) -> Option<BorrowRoaringishPacked<'a, Aligned>> {
         let begin = offset.begin.to_native() as usize;
-        let end = begin + offset.doc_id_group_len.to_native() as usize;
-        let (l, doc_id_groups, r) = unsafe { &mmap[begin..end].align_to::<u64>() };
+        let len = offset.len.to_native() as usize;
+        let end = begin + len;
+        let (l, packed, r) = unsafe { &mmap[begin..end].align_to::<u64>() };
         assert!(l.is_empty());
         assert!(r.is_empty());
 
-        let values_offset = unsafe { mmap.as_ptr().add(end).align_offset(16) };
-
-        let offset_advise = begin;
-        let len_advise = offset.doc_id_group_len.to_native() as usize
-            + values_offset
-            + offset.values_len.to_native() as usize;
-
-        if end + values_offset >= mmap.len() {
-            return None;
-        }
-        let begin = end + values_offset;
-        let end = begin + offset.values_len.to_native() as usize;
-        let (l, values, r) = unsafe { &mmap[begin..end].align_to::<u16>() };
-        assert!(l.is_empty());
-        assert!(r.is_empty());
-
-        mmap.advise_range(memmap2::Advice::Sequential, offset_advise, len_advise)
+        mmap.advise_range(memmap2::Advice::Sequential, begin, len)
             .unwrap();
 
-        Some(BorrowRoaringishPacked::new_raw(doc_id_groups, values))
+        Some(BorrowRoaringishPacked::new_raw(packed))
     }
 
     #[inline(always)]

@@ -1,6 +1,9 @@
 use std::mem::MaybeUninit;
 
-use crate::{allocator::Aligned64, roaringish::{Aligned, BorrowRoaringishPacked}};
+use crate::{
+    allocator::Aligned64,
+    roaringish::{clear_values, unpack_values, Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP},
+};
 
 use super::{private::IntersectSeal, Intersect};
 
@@ -16,63 +19,57 @@ impl Intersect for NaiveIntersect {
         lhs_i: &mut usize,
         rhs_i: &mut usize,
 
-        doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
-        values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
+        packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         i: &mut usize,
 
-        msb_doc_id_groups_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
-        msb_values_result: &mut Box<[MaybeUninit<u16>], Aligned64>,
+        msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
 
         lhs_len: u16,
         msb_mask: u16,
-        lsb_mask: u16
+        lsb_mask: u16,
     ) {
-        while *lhs_i < lhs.doc_id_groups.len() && *rhs_i < rhs.doc_id_groups.len() {
-            let lhs_doc_id_groups = unsafe { *lhs.doc_id_groups.get_unchecked(*lhs_i) };
-            let rhs_doc_id_groups = unsafe { *rhs.doc_id_groups.get_unchecked(*rhs_i) };
+        while *lhs_i < lhs.0.len() && *rhs_i < rhs.0.len() {
+            let lhs_packed = unsafe { *lhs.0.get_unchecked(*lhs_i) };
+            let lhs_doc_id_group = clear_values(lhs_packed);
+            let lhs_values = unpack_values(lhs_packed);
 
-            if lhs_doc_id_groups == rhs_doc_id_groups {
+            let rhs_packed = unsafe { *rhs.0.get_unchecked(*rhs_i) };
+            let rhs_doc_id_group = clear_values(rhs_packed);
+            let rhs_values = unpack_values(rhs_packed);
+
+            if lhs_doc_id_group == rhs_doc_id_group {
                 unsafe {
-                    doc_id_groups_result
-                        .get_unchecked_mut(*i)
-                        .write(lhs_doc_id_groups);
-
-                    let lhs_values = *lhs.values.get_unchecked(*lhs_i);
-                    let rhs_values = *rhs.values.get_unchecked(*rhs_i);
                     if FIRST {
-                        values_result.get_unchecked_mut(*i).write((lhs_values << lhs_len) & rhs_values);
+                        let intersection = (lhs_values << lhs_len) & rhs_values;
+                        packed_result
+                            .get_unchecked_mut(*i)
+                            .write(lhs_doc_id_group | intersection as u64);
 
-                        // TODO: this sucks
-                        msb_doc_id_groups_result
+                        msb_packed_result
                             .get_unchecked_mut(*j)
-                            .write(lhs_doc_id_groups + 1);
-                        msb_values_result
-                            .get_unchecked_mut(*j)
-                            .write(lhs_values);
+                            .write(lhs_packed + ADD_ONE_GROUP);
+
                         *j += (lhs_values & msb_mask > 1) as usize;
                     } else {
-                        values_result.get_unchecked_mut(*i)
-                        .write(
-                            lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values
-                        );
+                        let intersection =
+                            lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
+                        packed_result
+                            .get_unchecked_mut(*i)
+                            .write(lhs_doc_id_group | intersection as u64);
                     }
                 }
                 *i += 1;
                 *lhs_i += 1;
                 *rhs_i += 1;
-            } else if lhs_doc_id_groups > rhs_doc_id_groups {
+            } else if lhs_doc_id_group > rhs_doc_id_group {
                 *rhs_i += 1;
             } else {
                 if FIRST {
                     unsafe {
-                        let lhs_values = *lhs.values.get_unchecked(*lhs_i);
-                        msb_doc_id_groups_result
+                        msb_packed_result
                             .get_unchecked_mut(*j)
-                            .write(lhs_doc_id_groups + 1);
-                        msb_values_result
-                            .get_unchecked_mut(*j)
-                            .write(lhs_values);
+                            .write(lhs_packed + ADD_ONE_GROUP);
                         *j += (lhs_values & msb_mask > 1) as usize;
                     }
                 }
@@ -85,6 +82,6 @@ impl Intersect for NaiveIntersect {
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> usize {
-        lhs.doc_id_groups.len().min(rhs.doc_id_groups.len())
+        lhs.0.len().min(rhs.0.len())
     }
 }
