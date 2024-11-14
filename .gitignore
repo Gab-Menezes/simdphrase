@@ -5,3 +5,6 @@
 **.tsv
 .direnv
 /benchmark
+*.txt
+/msmarco*
+*.jsonl
