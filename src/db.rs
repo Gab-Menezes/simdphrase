@@ -60,36 +60,39 @@ pub const MAX_WINDOW_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
 pub struct Stats {
     pub normalize_tokenize: AtomicU64,
     pub merge: AtomicU64,
-    pub binary_search: AtomicU64,
+    pub first_binary_search: AtomicU64,
     pub first_intersect: AtomicU64,
+    pub first_intersect_simd: AtomicU64,
+    pub first_intersect_naive: AtomicU64,
+
+    pub second_binary_search: AtomicU64,
     pub second_intersect: AtomicU64,
+    pub second_intersect_simd: AtomicU64,
+    pub second_intersect_naive: AtomicU64,
+
     pub first_result: AtomicU64,
     pub second_result: AtomicU64,
-    pub add_lhs: AtomicU64,
-    pub add_rhs: AtomicU64,
 }
 
 impl Debug for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sum = self.normalize_tokenize.load(Relaxed)
             + self.merge.load(Relaxed)
-            + self.binary_search.load(Relaxed)
+            + self.first_binary_search.load(Relaxed)
             + self.first_intersect.load(Relaxed)
+            + self.second_binary_search.load(Relaxed)
             + self.second_intersect.load(Relaxed)
             + self.first_result.load(Relaxed)
-            + self.second_result.load(Relaxed)
-            + self.add_lhs.load(Relaxed)
-            + self.add_rhs.load(Relaxed);
+            + self.second_result.load(Relaxed);
 
         let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64 * 100f64;
         let merge = self.merge.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let binary_search = self.binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let first_binary_search = self.first_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
         let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let second_binary_search = self.second_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
         let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
         let first_result = self.first_result.load(Relaxed) as f64 / sum as f64 * 100f64;
         let second_result = self.second_result.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let add_lhs = self.add_lhs.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let add_rhs = self.add_rhs.load(Relaxed) as f64 / sum as f64 * 100f64;
 
         f.debug_struct("Stats")
             .field(
@@ -107,10 +110,10 @@ impl Debug for Stats {
                 ),
             )
             .field(
-                "binary_search",
+                "first_binary_search",
                 &format_args!(
-                    "({:.3}ms, {binary_search:.3}%)",
-                    self.binary_search.load(Relaxed) as f64 / 1000f64
+                    "({:.3}ms, {first_binary_search:.3}%)",
+                    self.first_binary_search.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
@@ -121,10 +124,45 @@ impl Debug for Stats {
                 ),
             )
             .field(
+                "    first_intersect_simd",
+                &format_args!(
+                    "({:.3}ms)",
+                    self.first_intersect_simd.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "    first_intersect_naive",
+                &format_args!(
+                    "({:.3}ms)",
+                    self.first_intersect_naive.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "second_binary_search",
+                &format_args!(
+                    "({:.3}ms, {second_binary_search:.3}%)",
+                    self.second_binary_search.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
                 "second_intersect",
                 &format_args!(
                     "({:.3}ms, {second_intersect:.3}%)",
                     self.second_intersect.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "    second_intersect_simd",
+                &format_args!(
+                    "({:.3}ms)",
+                    self.second_intersect_simd.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "    second_intersect_naive",
+                &format_args!(
+                    "({:.3}ms)",
+                    self.second_intersect_naive.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
@@ -139,20 +177,6 @@ impl Debug for Stats {
                 &format_args!(
                     "({:.3}ms, {second_result:.3}%)",
                     self.second_result.load(Relaxed) as f64 / 1000f64
-                ),
-            )
-            .field(
-                "add_lhs",
-                &format_args!(
-                    "({:.3}ms, {add_lhs:.3}%)",
-                    self.add_lhs.load(Relaxed) as f64 / 1000f64
-                ),
-            )
-            .field(
-                "add_rhs",
-                &format_args!(
-                    "({:.3}ms, {add_rhs:.3}%)",
-                    self.add_rhs.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .finish()

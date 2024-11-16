@@ -2,7 +2,7 @@
 
 use std::mem::MaybeUninit;
 
-use crate::allocator::Aligned64;
+use crate::{allocator::Aligned64, Stats};
 
 use super::{Aligned, BorrowRoaringishPacked};
 
@@ -18,6 +18,8 @@ pub trait Intersect: private::IntersectSeal {
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
         lhs_len: u16,
+
+        stats: &Stats,
     ) -> (Vec<u64, Aligned64>, Vec<u64, Aligned64>) {
         let mut lhs_i = 0;
         let mut rhs_i = 0;
@@ -50,6 +52,8 @@ pub trait Intersect: private::IntersectSeal {
             lhs_len,
             msb_mask,
             lsb_mask,
+
+            stats
         );
 
         let (packed_result_ptr, a0) = Box::into_raw_with_allocator(packed_result);
@@ -82,6 +86,8 @@ pub trait Intersect: private::IntersectSeal {
         lhs_len: u16,
         msb_mask: u16,
         lsb_mask: u16,
+
+        stats: &Stats,
     );
 
     fn intersection_buffer_size(

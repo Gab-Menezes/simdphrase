@@ -249,6 +249,28 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         lhs_len: u16,
         stats: &Stats,
     ) -> RoaringishPacked {
+        #[inline(always)]
+        fn binary_search(lhs: &mut BorrowRoaringishPacked<'_, Aligned>, rhs: &mut BorrowRoaringishPacked<'_, Aligned>) {
+            let first_lhs = clear_values(lhs.0[0]);
+            let first_rhs = clear_values(rhs.0[0]);
+    
+            if first_lhs < first_rhs {
+                let i = match rhs.0.binary_search_by_key(&first_lhs, |p| clear_values(*p)) {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                let aligned_i = i / 8 * 8;
+                *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[aligned_i..]);
+            } else if first_lhs > first_rhs {
+                let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                let aligned_i = i / 8 * 8;
+                *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[aligned_i..]);
+            }
+        }
+
         let mut lhs = self;
 
         if lhs.0.is_empty() || rhs.0.is_empty() {
@@ -256,37 +278,31 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         }
 
         let b = std::time::Instant::now();
-        let first_lhs = clear_values(lhs.0[0]);
-        let first_rhs = clear_values(rhs.0[0]);
-
-        if first_lhs < first_rhs {
-            let i = match rhs.0.binary_search_by_key(&first_lhs, |p| clear_values(*p)) {
-                Ok(i) => i,
-                Err(i) => i,
-            };
-            let aligned_i = i / 8 * 8;
-            rhs = BorrowRoaringishPacked::new_raw(&rhs.0[aligned_i..]);
-        } else if first_lhs > first_rhs {
-            let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
-                Ok(i) => i,
-                Err(i) => i,
-            };
-            let aligned_i = i / 8 * 8;
-            lhs = BorrowRoaringishPacked::new_raw(&lhs.0[aligned_i..]);
-        }
+        binary_search(&mut lhs, &mut rhs);
         stats
-            .binary_search
+            .first_binary_search
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
-        let (packed, msb_packed) = I::intersect::<true>(lhs, rhs, lhs_len);
+        let (packed, msb_packed) = I::intersect::<true>(lhs, rhs, lhs_len, stats);
         stats
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let msb_packed = BorrowRoaringishPacked::new(&msb_packed);
+        if msb_packed.is_empty() {
+            return RoaringishPacked(packed);
+        }
+
+        let mut msb_packed = BorrowRoaringishPacked::new(&msb_packed);
+
         let b = std::time::Instant::now();
-        let (msb_packed, _) = I::intersect::<false>(msb_packed, rhs, lhs_len);
+        binary_search(&mut msb_packed, &mut rhs);
+        stats
+            .second_binary_search
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+
+        let b = std::time::Instant::now();
+        let (msb_packed, _) = I::intersect::<false>(msb_packed, rhs, lhs_len, stats);
         stats
             .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);

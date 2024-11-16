@@ -1,8 +1,8 @@
-use std::mem::MaybeUninit;
+use std::{mem::MaybeUninit, sync::atomic::Ordering::Relaxed};
 
 use crate::{
     allocator::Aligned64,
-    roaringish::{clear_values, unpack_values, Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP},
+    roaringish::{clear_values, unpack_values, Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP}, Stats,
 };
 
 use super::{private::IntersectSeal, Intersect};
@@ -28,7 +28,11 @@ impl Intersect for NaiveIntersect {
         lhs_len: u16,
         msb_mask: u16,
         lsb_mask: u16,
+
+        stats: &Stats,
     ) {
+        let b = std::time::Instant::now();
+        
         while *lhs_i < lhs.0.len() && *rhs_i < rhs.0.len() {
             let lhs_packed = unsafe { *lhs.0.get_unchecked(*lhs_i) };
             let lhs_doc_id_group = clear_values(lhs_packed);
@@ -50,7 +54,7 @@ impl Intersect for NaiveIntersect {
                             .get_unchecked_mut(*j)
                             .write(lhs_packed + ADD_ONE_GROUP);
 
-                        *j += (lhs_values & msb_mask > 1) as usize;
+                        *j += (lhs_values & msb_mask > 0) as usize;
                     } else {
                         let intersection =
                             lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
@@ -70,11 +74,21 @@ impl Intersect for NaiveIntersect {
                         msb_packed_result
                             .get_unchecked_mut(*j)
                             .write(lhs_packed + ADD_ONE_GROUP);
-                        *j += (lhs_values & msb_mask > 1) as usize;
+                        *j += (lhs_values & msb_mask > 0) as usize;
                     }
                 }
                 *lhs_i += 1;
             }
+        }
+
+        if FIRST {
+            stats
+            .first_intersect_naive
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        } else {
+            stats
+            .second_intersect_naive
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         }
     }
 

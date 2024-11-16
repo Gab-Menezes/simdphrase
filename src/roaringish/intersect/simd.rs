@@ -10,12 +10,12 @@ use std::{
         _mm512_storeu_epi64, _mm_load_si128, _mm_loadu_epi16, _mm_mask_compressstoreu_epi16,
         _mm_maskz_compress_epi16, _mm_storeu_epi16,
     },
-    simd::num::SimdUint,
+    simd::num::SimdUint, sync::atomic::Ordering::Relaxed,
 };
 
-use crate::roaringish::{
+use crate::{roaringish::{
     clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked, ADD_ONE_GROUP,
-};
+}, Stats};
 
 use super::naive::NaiveIntersect;
 use super::{private::IntersectSeal, Intersect};
@@ -100,10 +100,8 @@ unsafe fn analyze_msb(
 
 #[inline(always)]
 fn rotl_u16(a: Simd<u16, N>, i: u16) -> Simd<u16, N> {
-    const M: u16 = 16;
-    let i = i % M;
     let p0 = a << i;
-    let p1 = a >> (M - i);
+    let p1 = a >> (16 - i);
     p0 | p1
 }
 
@@ -128,7 +126,11 @@ impl Intersect for SimdIntersect {
         lhs_len: u16,
         msb_mask: u16,
         lsb_mask: u16,
+
+        stats: &Stats,
     ) {
+        let b = std::time::Instant::now();
+        
         let simd_msb_mask = Simd::splat(msb_mask);
         let simd_lsb_mask = Simd::splat(lsb_mask);
 
@@ -223,6 +225,16 @@ impl Intersect for SimdIntersect {
             };
         }
 
+        if FIRST {
+            stats
+            .first_intersect_simd
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        } else {
+            stats
+            .second_intersect_simd
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        }
+
         NaiveIntersect::inner_intersect::<FIRST>(
             lhs,
             rhs,
@@ -235,6 +247,8 @@ impl Intersect for SimdIntersect {
             lhs_len,
             msb_mask,
             lsb_mask,
+
+            stats
         );
     }
 
