@@ -10,12 +10,17 @@ use std::{
         _mm512_storeu_epi64, _mm_load_si128, _mm_loadu_epi16, _mm_mask_compressstoreu_epi16,
         _mm_maskz_compress_epi16, _mm_storeu_epi16,
     },
-    simd::num::SimdUint, sync::atomic::Ordering::Relaxed,
+    simd::num::SimdUint,
+    sync::atomic::Ordering::Relaxed,
 };
 
-use crate::{roaringish::{
-    clear_values, clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked, ADD_ONE_GROUP
-}, Stats};
+use crate::{
+    roaringish::{
+        clear_values, clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked,
+        ADD_ONE_GROUP,
+    },
+    Stats,
+};
 
 use super::naive::NaiveIntersect;
 use super::{private::IntersectSeal, Intersect};
@@ -80,12 +85,11 @@ unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
 #[inline(always)]
 unsafe fn analyze_msb(
     lhs_pack: Simd<u64, N>,
-    lhs_values: Simd<u16, N>,
     msb_packed_result: &mut [MaybeUninit<u64>],
     j: &mut usize,
-    msb_mask: Simd<u16, N>,
+    msb_mask: Simd<u64, N>,
 ) {
-    let mask = (lhs_values & msb_mask).simd_gt(Simd::splat(0)).to_bitmask() as u8;
+    let mask = (lhs_pack & msb_mask).simd_gt(Simd::splat(0)).to_bitmask() as u8;
     let pack_plus_one: Simd<u64, N> = lhs_pack + Simd::splat(ADD_ONE_GROUP);
     unsafe {
         // TODO: avoid compressstore on zen4
@@ -99,9 +103,14 @@ unsafe fn analyze_msb(
 }
 
 #[inline(always)]
-fn rotl_u16(a: Simd<u16, N>, i: u16) -> Simd<u16, N> {
+fn rotl_u16(a: Simd<u64, N>, i: u64) -> Simd<u64, N> {
     let p0 = a << i;
     let p1 = a >> (16 - i);
+
+    // we don't need to unpack the values, since
+    // in the next step we already `and` with
+    // with mask where the doc id and group are
+    // zeroed
     p0 | p1
 }
 
@@ -130,9 +139,9 @@ impl Intersect for SimdIntersect {
         stats: &Stats,
     ) {
         let b = std::time::Instant::now();
-        
-        let simd_msb_mask = Simd::splat(msb_mask);
-        let simd_lsb_mask = Simd::splat(lsb_mask);
+
+        let simd_msb_mask = Simd::splat(msb_mask as u64);
+        let simd_lsb_mask = Simd::splat(lsb_mask as u64);
 
         let end_lhs = lhs.0.len() / N * N;
         let end_rhs = rhs.0.len() / N * N;
@@ -159,7 +168,6 @@ impl Intersect for SimdIntersect {
             };
 
             let lhs_doc_id_group = clear_values_simd(lhs_pack.into());
-            let lhs_values = unpack_values_simd(lhs_pack.into());
 
             let rhs_doc_id_group = clear_values_simd(rhs_pack.into());
             let rhs_values = unpack_values_simd(rhs_pack.into());
@@ -168,25 +176,25 @@ impl Intersect for SimdIntersect {
                 unsafe { vp2intersectq(lhs_doc_id_group.into(), rhs_doc_id_group.into()) };
 
             unsafe {
-                let doc_id_group_compress: Simd<u64, N> =
-                    _mm512_maskz_compress_epi64(lhs_mask, lhs_doc_id_group.into()).into();
-                let lhs_values_compress: Simd<u16, N> =
-                    _mm_maskz_compress_epi16(lhs_mask, lhs_values.into()).into();
-                let rhs_values_compress: Simd<u16, N> =
-                    _mm_maskz_compress_epi16(rhs_mask, rhs_values.into()).into();
+                let lhs_pack_compress: Simd<u64, N> =
+                    _mm512_maskz_compress_epi64(lhs_mask, lhs_pack).into();
+                let doc_id_group_compress = clear_values_simd(lhs_pack_compress.into());
+                let lhs_values_compress = unpack_values_simd(lhs_pack_compress.into());
+
+                let rhs_values_compress: Simd<u64, N> =
+                    _mm512_maskz_compress_epi64(rhs_mask, rhs_values.into()).into();
 
                 if FIRST {
                     let intersection =
-                        ((lhs_values_compress << lhs_len) & rhs_values_compress).cast();
+                        (lhs_values_compress << (lhs_len as u64)) & rhs_values_compress;
                     _mm512_storeu_epi64(
                         packed_result.as_mut_ptr().add(*i) as *mut _,
                         (doc_id_group_compress | intersection).into(),
                     );
                 } else {
-                    let intersection = (rotl_u16(lhs_values_compress, lhs_len)
+                    let intersection = rotl_u16(lhs_values_compress, lhs_len as u64)
                         & simd_lsb_mask
-                        & rhs_values_compress)
-                        .cast();
+                        & rhs_values_compress;
                     _mm512_storeu_epi64(
                         packed_result.as_mut_ptr().add(*i) as *mut _,
                         (doc_id_group_compress | intersection).into(),
@@ -199,13 +207,7 @@ impl Intersect for SimdIntersect {
             if FIRST {
                 if lhs_last <= rhs_last {
                     unsafe {
-                        analyze_msb(
-                            lhs_pack.into(),
-                            lhs_values,
-                            msb_packed_result,
-                            j,
-                            simd_msb_mask,
-                        );
+                        analyze_msb(lhs_pack.into(), msb_packed_result, j, simd_msb_mask);
                     }
                     *lhs_i += N;
                 }
@@ -219,25 +221,18 @@ impl Intersect for SimdIntersect {
         if FIRST && need_to_analyze_msb && !(*lhs_i < lhs.0.len() && *rhs_i < rhs.0.len()) {
             unsafe {
                 let lhs_pack = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _);
-                let lhs_values = unpack_values_simd(lhs_pack.into());
-                analyze_msb(
-                    lhs_pack.into(),
-                    lhs_values,
-                    msb_packed_result,
-                    j,
-                    simd_msb_mask,
-                );
+                analyze_msb(lhs_pack.into(), msb_packed_result, j, simd_msb_mask);
             };
         }
 
         if FIRST {
             stats
-            .first_intersect_simd
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+                .first_intersect_simd
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         } else {
             stats
-            .second_intersect_simd
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+                .second_intersect_simd
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         }
 
         NaiveIntersect::inner_intersect::<FIRST>(
@@ -252,8 +247,7 @@ impl Intersect for SimdIntersect {
             lhs_len,
             msb_mask,
             lsb_mask,
-
-            stats
+            stats,
         );
     }
 

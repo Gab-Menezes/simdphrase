@@ -87,11 +87,11 @@ const fn unpack_values(packed: u64) -> u16 {
 }
 
 #[inline(always)]
-fn unpack_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u16, N> 
+fn unpack_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N> 
 where
     LaneCount<N>: SupportedLaneCount
 {
-    packed.cast()
+    packed & Simd::splat(0xFFFF)
 }
 
 pub enum RoaringishPackedKind<'a, A> {
