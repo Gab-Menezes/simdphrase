@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::{roaringish::{
-    clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked, ADD_ONE_GROUP,
+    clear_values, clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked, ADD_ONE_GROUP
 }, Stats};
 
 use super::naive::NaiveIntersect;
@@ -144,6 +144,14 @@ impl Intersect for SimdIntersect {
         let mut need_to_analyze_msb = false;
 
         while *lhs_i < lhs_packed.len() && *rhs_i < rhs_packed.len() {
+            // Don't move this code around
+            // this leads to shit failed optimization by LLVM
+            // where it try to create SIMD code, but it fucks perf
+            //
+            // Me and my homies hate LLVM
+            let lhs_last = unsafe { clear_values(*lhs_packed.get_unchecked(*lhs_i + N - 1)) };
+            let rhs_last = unsafe { clear_values(*rhs_packed.get_unchecked(*rhs_i + N - 1)) };
+
             let (lhs_pack, rhs_pack) = unsafe {
                 let lhs_pack = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _);
                 let rhs_pack = _mm512_load_epi64(rhs_packed.as_ptr().add(*rhs_i) as *const _);
@@ -187,9 +195,6 @@ impl Intersect for SimdIntersect {
 
                 *i += lhs_mask.count_ones() as usize;
             }
-
-            let lhs_last = unsafe { *lhs_packed.get_unchecked(*lhs_i + N - 1) };
-            let rhs_last = unsafe { *rhs_packed.get_unchecked(*rhs_i + N - 1) };
 
             if FIRST {
                 if lhs_last <= rhs_last {
