@@ -175,33 +175,31 @@ impl Intersect for SimdIntersect {
             let (lhs_mask, rhs_mask) =
                 unsafe { vp2intersectq(lhs_doc_id_group.into(), rhs_doc_id_group.into()) };
 
-            unsafe {
-                let lhs_pack_compress: Simd<u64, N> =
-                    _mm512_maskz_compress_epi64(lhs_mask, lhs_pack).into();
-                let doc_id_group_compress = clear_values_simd(lhs_pack_compress.into());
-                let lhs_values_compress = unpack_values_simd(lhs_pack_compress.into());
+            if FIRST || lhs_mask > 0 {
+                unsafe {
+                    let lhs_pack_compress: Simd<u64, N> =
+                        _mm512_maskz_compress_epi64(lhs_mask, lhs_pack).into();
+                    let doc_id_group_compress = clear_values_simd(lhs_pack_compress.into());
+                    let lhs_values_compress = unpack_values_simd(lhs_pack_compress.into());
 
-                let rhs_values_compress: Simd<u64, N> =
-                    _mm512_maskz_compress_epi64(rhs_mask, rhs_values.into()).into();
+                    let rhs_values_compress: Simd<u64, N> =
+                        _mm512_maskz_compress_epi64(rhs_mask, rhs_values.into()).into();
 
-                if FIRST {
-                    let intersection =
-                        (lhs_values_compress << (lhs_len as u64)) & rhs_values_compress;
+                    let intersection = if FIRST {
+                        (lhs_values_compress << (lhs_len as u64)) & rhs_values_compress
+                    } else {
+                        rotl_u16(lhs_values_compress, lhs_len as u64)
+                            & simd_lsb_mask
+                            & rhs_values_compress
+                    };
+
                     _mm512_storeu_epi64(
                         packed_result.as_mut_ptr().add(*i) as *mut _,
                         (doc_id_group_compress | intersection).into(),
                     );
-                } else {
-                    let intersection = rotl_u16(lhs_values_compress, lhs_len as u64)
-                        & simd_lsb_mask
-                        & rhs_values_compress;
-                    _mm512_storeu_epi64(
-                        packed_result.as_mut_ptr().add(*i) as *mut _,
-                        (doc_id_group_compress | intersection).into(),
-                    );
+
+                    *i += lhs_mask.count_ones() as usize;
                 }
-
-                *i += lhs_mask.count_ones() as usize;
             }
 
             if FIRST {

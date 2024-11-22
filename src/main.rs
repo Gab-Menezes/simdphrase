@@ -7,20 +7,35 @@
 #![feature(iter_intersperse)]
 #![feature(new_zeroed_alloc)]
 
-use ahash::AHashSet;
+use ahash::{AHashSet, RandomState};
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use core::str;
 use heed::{DatabaseFlags, EnvFlags, EnvOpenOptions};
 use hyperloglogplus::HyperLogLog;
 use memmap2::Mmap;
-use phrase_search::{naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, Aligned64, BorrowRoaringishPacked, RoaringishPacked, CommonTokens, Indexer, Searcher, Stats, DB};
+use phrase_search::{
+    naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, Aligned64,
+    BorrowRoaringishPacked, CommonTokens, Indexer, RoaringishPacked, Searcher, Stats, DB,
+};
 use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 use std::{
-    alloc::{alloc, dealloc, Allocator}, fmt::Debug, fs::File, io::{BufRead, BufReader}, path::PathBuf, ptr::NonNull, simd::Simd, str::FromStr, time::Duration
+    alloc::{alloc, dealloc, Allocator},
+    collections::HashSet,
+    fmt::Debug,
+    fs::{read_to_string, File},
+    hash::Hash,
+    io::{BufRead, BufReader},
+    mem::replace,
+    path::PathBuf,
+    ptr::NonNull,
+    simd::Simd,
+    str::FromStr,
+    time::Duration,
 };
 
 #[derive(Parser, Debug)]
@@ -80,19 +95,11 @@ where
         + 'static,
 {
     type Intersect = SimdIntersect;
-    let b = std::time::Instant::now();
 
     let searcher = Searcher::<D>::new(&args.index_name, args.db_size).unwrap();
-    // let shard = searcher.get_shard(0).unwrap();
-
-    println!();
-    println!("Opening database took: {:?}", b.elapsed());
-    println!();
 
     let queries = std::fs::read_to_string(args.queries).unwrap();
-
     let queries: Vec<_> = queries.lines().collect();
-
     for q in queries.iter() {
         let stats = Stats::default();
         for _ in 0..20 {

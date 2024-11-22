@@ -251,24 +251,54 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     ) -> RoaringishPacked {
         #[inline(always)]
         fn binary_search(lhs: &mut BorrowRoaringishPacked<'_, Aligned>, rhs: &mut BorrowRoaringishPacked<'_, Aligned>) {
-            let first_lhs = clear_values(lhs.0[0]);
-            let first_rhs = clear_values(rhs.0[0]);
+            // skip the begining of the slice
+            let Some(first_lhs) = lhs.0.first() else {
+                return;
+            };
+
+            let Some(first_rhs) = rhs.0.first() else {
+                return;
+            };
+
+            let first_lhs = clear_values(*first_lhs);
+            let first_rhs = clear_values(*first_rhs);
     
             if first_lhs < first_rhs {
+                let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
+                    // in the case where we are moving the lhs and both values are
+                    // equal we need to go back one to ensure that the check of msb
+                    // can't skip the previous value
+                    Ok(i) => i.saturating_sub(1),
+                    Err(i) => i,
+                };
+                let aligned_i = i / 8 * 8;
+                *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[aligned_i..]);
+            } else if first_lhs > first_rhs {
                 let i = match rhs.0.binary_search_by_key(&first_lhs, |p| clear_values(*p)) {
                     Ok(i) => i,
                     Err(i) => i,
                 };
                 let aligned_i = i / 8 * 8;
                 *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[aligned_i..]);
-            } else if first_lhs > first_rhs {
-                let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
-                    Ok(i) => i,
-                    Err(i) => i,
-                };
-                let aligned_i = i / 8 * 8;
-                *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[aligned_i..]);
             }
+
+            // skip the ending of the slice
+            // let last_lhs = clear_values(*lhs.0.last().unwrap());
+            // let last_rhs = clear_values(*rhs.0.last().unwrap());
+
+            // if last_lhs < last_rhs {
+            //     let i = match rhs.0.binary_search_by_key(&last_lhs, |p| clear_values(*p)) {
+            //         Ok(i) => i + 1,
+            //         Err(i) => i,
+            //     } + 1;
+            //     *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[..i]);
+            // } else if last_lhs > last_rhs {
+            //     let i = match lhs.0.binary_search_by_key(&last_rhs, |p| clear_values(*p)) {
+            //         Ok(i) => i + 1,
+            //         Err(i) => i,
+            //     } + 1;
+            //     *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[..i]);
+            // }
         }
 
         let mut lhs = self;
@@ -288,10 +318,6 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         stats
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-        if msb_packed.is_empty() {
-            return RoaringishPacked(packed);
-        }
 
         let mut msb_packed = BorrowRoaringishPacked::new(&msb_packed);
 
