@@ -16,8 +16,7 @@ use std::{
 
 use crate::{
     roaringish::{
-        clear_values, clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked,
-        ADD_ONE_GROUP,
+        clear_group_values, clear_values, clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked, ADD_ONE_GROUP
     },
     Stats,
 };
@@ -132,6 +131,7 @@ impl Intersect for SimdIntersect {
         msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
 
+        add_to_group: u64,
         lhs_len: u16,
         msb_mask: u16,
         lsb_mask: u16,
@@ -158,11 +158,16 @@ impl Intersect for SimdIntersect {
             // where it try to create SIMD code, but it fucks perf
             //
             // Me and my homies hate LLVM
-            let lhs_last = unsafe { clear_values(*lhs_packed.get_unchecked(*lhs_i + N - 1)) };
+            let lhs_last = unsafe { clear_values(*lhs_packed.get_unchecked(*lhs_i + N - 1) + if FIRST { add_to_group } else { 0 }) };
             let rhs_last = unsafe { clear_values(*rhs_packed.get_unchecked(*rhs_i + N - 1)) };
 
             let (lhs_pack, rhs_pack) = unsafe {
-                let lhs_pack = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _);
+                let lhs_pack = if FIRST {
+                    let lhs_pack: Simd<u64, N> = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _).into();
+                    (lhs_pack + Simd::splat(add_to_group)).into()
+                } else {
+                    _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _)
+                };
                 let rhs_pack = _mm512_load_epi64(rhs_packed.as_ptr().add(*rhs_i) as *const _);
                 (lhs_pack, rhs_pack)
             };
@@ -218,8 +223,8 @@ impl Intersect for SimdIntersect {
 
         if FIRST && need_to_analyze_msb && !(*lhs_i < lhs.0.len() && *rhs_i < rhs.0.len()) {
             unsafe {
-                let lhs_pack = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _);
-                analyze_msb(lhs_pack.into(), msb_packed_result, j, simd_msb_mask);
+                let lhs_pack: Simd<u64, N> = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _).into();
+                analyze_msb(lhs_pack + Simd::splat(add_to_group), msb_packed_result, j, simd_msb_mask);
             };
         }
 
@@ -242,6 +247,7 @@ impl Intersect for SimdIntersect {
             i,
             msb_packed_result,
             j,
+            add_to_group,
             lhs_len,
             msb_mask,
             lsb_mask,

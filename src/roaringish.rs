@@ -17,7 +17,9 @@ use std::{
     num::NonZero,
     ops::{Add, Deref},
     simd::{
-        cmp::{SimdPartialEq, SimdPartialOrd}, num::{SimdInt, SimdUint}, simd_swizzle, LaneCount, Simd, SimdElement, SupportedLaneCount
+        cmp::{SimdPartialEq, SimdPartialOrd},
+        num::{SimdInt, SimdUint},
+        simd_swizzle, LaneCount, Simd, SimdElement, SupportedLaneCount,
     },
     sync::atomic::Ordering::Relaxed,
 };
@@ -66,10 +68,14 @@ const fn clear_values(packed: u64) -> u64 {
     packed & !0xFFFF
 }
 
+const fn clear_group_values(packed: u64) -> u64 {
+    packed & !0xFFFFFFFF
+}
+
 #[inline(always)]
-fn clear_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N> 
+fn clear_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N>
 where
-    LaneCount<N>: SupportedLaneCount
+    LaneCount<N>: SupportedLaneCount,
 {
     packed & Simd::splat(!0xFFFF)
 }
@@ -87,9 +93,9 @@ const fn unpack_values(packed: u64) -> u16 {
 }
 
 #[inline(always)]
-fn unpack_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N> 
+fn unpack_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N>
 where
-    LaneCount<N>: SupportedLaneCount
+    LaneCount<N>: SupportedLaneCount,
 {
     packed & Simd::splat(0xFFFF)
 }
@@ -246,11 +252,14 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     pub fn intersect<I: Intersect>(
         self,
         mut rhs: Self,
-        lhs_len: u16,
+        lhs_len: u32,
         stats: &Stats,
     ) -> RoaringishPacked {
         #[inline(always)]
-        fn binary_search(lhs: &mut BorrowRoaringishPacked<'_, Aligned>, rhs: &mut BorrowRoaringishPacked<'_, Aligned>) {
+        fn binary_search(
+            lhs: &mut BorrowRoaringishPacked<'_, Aligned>,
+            rhs: &mut BorrowRoaringishPacked<'_, Aligned>,
+        ) {
             // skip the begining of the slice
             let Some(first_lhs) = lhs.0.first() else {
                 return;
@@ -260,45 +269,24 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
                 return;
             };
 
-            let first_lhs = clear_values(*first_lhs);
-            let first_rhs = clear_values(*first_rhs);
-    
+            let first_lhs = clear_group_values(*first_lhs) as u64;
+            let first_rhs = clear_group_values(*first_rhs) as u64;
+
             if first_lhs < first_rhs {
-                let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
-                    // in the case where we are moving the lhs and both values are
-                    // equal we need to go back one to ensure that the check of msb
-                    // can't skip the previous value
-                    Ok(i) => i.saturating_sub(1),
+                let i = match lhs.0.binary_search(&first_rhs) {
+                    Ok(i) => i,
                     Err(i) => i,
                 };
                 let aligned_i = i / 8 * 8;
                 *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[aligned_i..]);
             } else if first_lhs > first_rhs {
-                let i = match rhs.0.binary_search_by_key(&first_lhs, |p| clear_values(*p)) {
+                let i = match rhs.0.binary_search(&first_lhs) {
                     Ok(i) => i,
                     Err(i) => i,
                 };
                 let aligned_i = i / 8 * 8;
                 *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[aligned_i..]);
             }
-
-            // skip the ending of the slice
-            // let last_lhs = clear_values(*lhs.0.last().unwrap());
-            // let last_rhs = clear_values(*rhs.0.last().unwrap());
-
-            // if last_lhs < last_rhs {
-            //     let i = match rhs.0.binary_search_by_key(&last_lhs, |p| clear_values(*p)) {
-            //         Ok(i) => i + 1,
-            //         Err(i) => i,
-            //     } + 1;
-            //     *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[..i]);
-            // } else if last_lhs > last_rhs {
-            //     let i = match lhs.0.binary_search_by_key(&last_rhs, |p| clear_values(*p)) {
-            //         Ok(i) => i + 1,
-            //         Err(i) => i,
-            //     } + 1;
-            //     *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[..i]);
-            // }
         }
 
         let mut lhs = self;
