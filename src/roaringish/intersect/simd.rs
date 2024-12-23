@@ -16,7 +16,8 @@ use std::{
 
 use crate::{
     roaringish::{
-        clear_group_values, clear_values, clear_values_simd, unpack_values_simd, Aligned64, BorrowRoaringishPacked, ADD_ONE_GROUP
+        clear_group_values, clear_values, clear_values_simd, unpack_values, unpack_values_simd,
+        Aligned64, BorrowRoaringishPacked, ADD_ONE_GROUP,
     },
     Stats,
 };
@@ -128,7 +129,7 @@ impl Intersect for SimdIntersect {
         packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         i: &mut usize,
 
-        msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        _msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
 
         add_to_group: u64,
@@ -140,7 +141,7 @@ impl Intersect for SimdIntersect {
     ) {
         let b = std::time::Instant::now();
 
-        let simd_msb_mask = Simd::splat(msb_mask as u64);
+        // let simd_msb_mask = Simd::splat(msb_mask as u64);
         let simd_lsb_mask = Simd::splat(lsb_mask as u64);
 
         let end_lhs = lhs.0.len() / N * N;
@@ -150,7 +151,7 @@ impl Intersect for SimdIntersect {
         assert_eq!(lhs_packed.len() % N, 0);
         assert_eq!(rhs_packed.len() % N, 0);
 
-        let mut need_to_analyze_msb = false;
+        // let mut need_to_analyze_msb = false;
 
         while *lhs_i < lhs_packed.len() && *rhs_i < rhs_packed.len() {
             // Don't move this code around
@@ -158,34 +159,41 @@ impl Intersect for SimdIntersect {
             // where it try to create SIMD code, but it fucks perf
             //
             // Me and my homies hate LLVM
-            let lhs_last = unsafe { clear_values(*lhs_packed.get_unchecked(*lhs_i + N - 1) + if FIRST { add_to_group } else { 0 }) };
+            let lhs_last = unsafe {
+                clear_values(
+                    *lhs_packed.get_unchecked(*lhs_i + N - 1)
+                        + add_to_group
+                        + if FIRST { 0 } else { ADD_ONE_GROUP },
+                )
+            };
             let rhs_last = unsafe { clear_values(*rhs_packed.get_unchecked(*rhs_i + N - 1)) };
 
-            let (lhs_pack, rhs_pack) = unsafe {
-                let lhs_pack = if FIRST {
-                    let lhs_pack: Simd<u64, N> = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _).into();
-                    (lhs_pack + Simd::splat(add_to_group)).into()
-                } else {
-                    _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _)
-                };
+            let (lhs_pack, rhs_pack): (Simd<u64, N>, Simd<u64, N>) = unsafe {
+                let lhs_pack = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _);
                 let rhs_pack = _mm512_load_epi64(rhs_packed.as_ptr().add(*rhs_i) as *const _);
-                (lhs_pack, rhs_pack)
+                (lhs_pack.into(), rhs_pack.into())
+            };
+            let lhs_pack = lhs_pack + Simd::splat(add_to_group);
+            let lhs_pack = if FIRST {
+                lhs_pack
+            } else {
+                lhs_pack + Simd::splat(ADD_ONE_GROUP)
             };
 
-            let lhs_doc_id_group = clear_values_simd(lhs_pack.into());
+            let lhs_doc_id_group = clear_values_simd(lhs_pack);
 
-            let rhs_doc_id_group = clear_values_simd(rhs_pack.into());
-            let rhs_values = unpack_values_simd(rhs_pack.into());
+            let rhs_doc_id_group = clear_values_simd(rhs_pack);
+            let rhs_values = unpack_values_simd(rhs_pack);
 
             let (lhs_mask, rhs_mask) =
                 unsafe { vp2intersectq(lhs_doc_id_group.into(), rhs_doc_id_group.into()) };
 
-            if FIRST || lhs_mask > 0 {
+            // if FIRST || lhs_mask > 0 {
                 unsafe {
                     let lhs_pack_compress: Simd<u64, N> =
-                        _mm512_maskz_compress_epi64(lhs_mask, lhs_pack).into();
-                    let doc_id_group_compress = clear_values_simd(lhs_pack_compress.into());
-                    let lhs_values_compress = unpack_values_simd(lhs_pack_compress.into());
+                        _mm512_maskz_compress_epi64(lhs_mask, lhs_pack.into()).into();
+                    let doc_id_group_compress = clear_values_simd(lhs_pack_compress);
+                    let lhs_values_compress = unpack_values_simd(lhs_pack_compress);
 
                     let rhs_values_compress: Simd<u64, N> =
                         _mm512_maskz_compress_epi64(rhs_mask, rhs_values.into()).into();
@@ -205,28 +213,36 @@ impl Intersect for SimdIntersect {
 
                     *i += lhs_mask.count_ones() as usize;
                 }
-            }
+            // }
 
-            if FIRST {
-                if lhs_last <= rhs_last {
-                    unsafe {
-                        analyze_msb(lhs_pack.into(), msb_packed_result, j, simd_msb_mask);
-                    }
-                    *lhs_i += N;
-                }
-            } else {
-                *lhs_i += N * (lhs_last <= rhs_last) as usize;
-            }
+            // if FIRST {
+            //     if lhs_last <= rhs_last {
+            //         unsafe {
+            //             analyze_msb(lhs_pack.into(), msb_packed_result, j, simd_msb_mask);
+            //         }
+            //         *lhs_i += N;
+            //     }
+            // } else {
+            //     *lhs_i += N * (lhs_last <= rhs_last) as usize;
+            // }
+            *lhs_i += N * (lhs_last <= rhs_last) as usize;
+
             *rhs_i += N * (rhs_last <= lhs_last) as usize;
-            need_to_analyze_msb = rhs_last < lhs_last;
+            // need_to_analyze_msb = rhs_last < lhs_last;
         }
 
-        if FIRST && need_to_analyze_msb && !(*lhs_i < lhs.0.len() && *rhs_i < rhs.0.len()) {
-            unsafe {
-                let lhs_pack: Simd<u64, N> = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _).into();
-                analyze_msb(lhs_pack + Simd::splat(add_to_group), msb_packed_result, j, simd_msb_mask);
-            };
-        }
+        // if FIRST && need_to_analyze_msb && !(*lhs_i < lhs.0.len() && *rhs_i < rhs.0.len()) {
+        //     unsafe {
+        //         let lhs_pack: Simd<u64, N> =
+        //             _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _).into();
+        //         analyze_msb(
+        //             lhs_pack + Simd::splat(add_to_group),
+        //             msb_packed_result,
+        //             j,
+        //             simd_msb_mask,
+        //         );
+        //     };
+        // }
 
         if FIRST {
             stats
@@ -238,21 +254,141 @@ impl Intersect for SimdIntersect {
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         }
 
-        NaiveIntersect::inner_intersect::<FIRST>(
-            lhs,
-            rhs,
-            lhs_i,
-            rhs_i,
-            packed_result,
-            i,
-            msb_packed_result,
-            j,
-            add_to_group,
-            lhs_len,
-            msb_mask,
-            lsb_mask,
-            stats,
-        );
+        // NaiveIntersect::inner_intersect::<FIRST>(
+        //     lhs,
+        //     rhs,
+        //     lhs_i,
+        //     rhs_i,
+        //     packed_result,
+        //     i,
+        //     msb_packed_result,
+        //     j,
+        //     add_to_group,
+        //     lhs_len,
+        //     msb_mask,
+        //     lsb_mask,
+        //     stats,
+        // );
+
+        if FIRST {
+            stats
+                .first_intersect_simd
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        } else {
+            stats
+                .second_intersect_simd
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        }
+
+        // println!("simd: {}", b.elapsed().as_micros() as f64 / 1000f64);
+
+        if !(*lhs_i < lhs.0.len() && *rhs_i < rhs.0.len()) {
+            return;
+        }
+
+        let b = std::time::Instant::now();
+        // we know at this point that at least `lhs` or `rhs`
+        // has a remainder of `<= 7` elemets, so we can binary search
+        // this elements
+        let mut lhs_rem = &lhs.0[*lhs_i..];
+        let mut rhs_rem = &rhs.0[*rhs_i..];
+
+        if lhs_rem.len() <= rhs_rem.len() {
+            for lhs_pack in lhs_rem {
+                let lhs_pack = *lhs_pack + add_to_group + if FIRST { 0 } else { ADD_ONE_GROUP };
+                let lhs_doc_id_group = clear_values(lhs_pack);
+                let lhs_values = unpack_values(lhs_pack);
+                match rhs_rem
+                    .binary_search_by_key(&lhs_doc_id_group, |rhs_pack| clear_values(*rhs_pack))
+                {
+                    Ok(k) => {
+                        let rhs_pack = rhs_rem[k];
+                        let rhs_values = unpack_values(rhs_pack);
+                        let intersection = if FIRST {
+                            (lhs_values << lhs_len) & rhs_values
+                        } else {
+                            lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values
+                        };
+                        unsafe {
+                            packed_result
+                                .get_unchecked_mut(*i)
+                                .write(lhs_doc_id_group | intersection as u64);
+                        }
+                        *i += 1;
+                        rhs_rem = &rhs_rem[k + 1..];
+                    }
+                    Err(k) => {
+                        rhs_rem = &rhs_rem[k..];
+                    }
+                }
+
+                // if FIRST {
+                //     unsafe {
+                //         msb_packed_result
+                //             .get_unchecked_mut(*j)
+                //             .write(lhs_pack + ADD_ONE_GROUP);
+                //     }
+                //     *j += (lhs_values & msb_mask > 0) as usize;
+                // }
+            }
+        } else {
+            // let mut end = 0;
+            for rhs_pack in rhs_rem {
+                let rhs_doc_id_group = clear_values(*rhs_pack);
+                let rhs_values = unpack_values(*rhs_pack);
+                match lhs_rem.binary_search_by_key(&rhs_doc_id_group, |lhs_pack| {
+                    clear_values(*lhs_pack) + add_to_group + if FIRST { 0 } else { ADD_ONE_GROUP }
+                }) {
+                    Ok(k) => {
+                        let lhs_pack = lhs_rem[k];
+                        let lhs_values = unpack_values(lhs_pack);
+                        let intersection = if FIRST {
+                            (lhs_values << lhs_len) & rhs_values
+                        } else {
+                            lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values
+                        };
+                        unsafe {
+                            packed_result
+                                .get_unchecked_mut(*i)
+                                .write(rhs_doc_id_group | intersection as u64);
+                        }
+                        *i += 1;
+
+                        // end += k + 1;
+                        lhs_rem = &lhs_rem[k + 1..]
+                    }
+                    Err(k) => {
+                        // end += k;
+                        lhs_rem = &lhs_rem[k..]
+                    }
+                }
+            }
+            // if FIRST {
+            //     let lhs_rem = &lhs.0[*lhs_i..*lhs_i + end];
+            //     for lhs_pack in lhs_rem {
+            //         let lhs_pack = *lhs_pack + if FIRST { add_to_group } else { 0 };
+            //         let lhs_values = unpack_values(lhs_pack);
+            //         unsafe {
+            //             msb_packed_result
+            //                 .get_unchecked_mut(*j)
+            //                 .write(lhs_pack + ADD_ONE_GROUP);
+            //         }
+            //         *j += (lhs_values & msb_mask > 0) as usize;
+            //     }
+            // }
+        }
+
+        if FIRST {
+            stats
+                .first_intersect_binary
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        } else {
+            stats
+                .second_intersect_binary
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+        }
+
+        // println!("binary: {}", b.elapsed().as_micros() as f64 / 1000f64);
     }
 
     fn intersection_buffer_size(

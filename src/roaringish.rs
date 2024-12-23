@@ -302,21 +302,21 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
-        let (packed, msb_packed) = I::intersect::<true>(lhs, rhs, lhs_len, stats);
+        let (packed, _msb_packed) = I::intersect::<true>(lhs, rhs, lhs_len, stats);
         stats
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let mut msb_packed = BorrowRoaringishPacked::new(&msb_packed);
+        // let mut msb_packed = BorrowRoaringishPacked::new(&msb_packed);
+
+        // let b = std::time::Instant::now();
+        // binary_search(&mut msb_packed, &mut rhs);
+        // stats
+        //     .second_binary_search
+        //     .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
-        binary_search(&mut msb_packed, &mut rhs);
-        stats
-            .second_binary_search
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-        let b = std::time::Instant::now();
-        let (msb_packed, _) = I::intersect::<false>(msb_packed, rhs, lhs_len, stats);
+        let (msb_packed, _) = I::intersect::<false>(lhs, rhs, lhs_len, stats);
         stats
             .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);

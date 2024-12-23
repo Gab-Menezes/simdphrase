@@ -63,11 +63,13 @@ pub struct Stats {
     pub first_binary_search: AtomicU64,
     pub first_intersect: AtomicU64,
     pub first_intersect_simd: AtomicU64,
+    pub first_intersect_binary: AtomicU64,
     pub first_intersect_naive: AtomicU64,
 
     pub second_binary_search: AtomicU64,
     pub second_intersect: AtomicU64,
     pub second_intersect_simd: AtomicU64,
+    pub second_intersect_binary: AtomicU64,
     pub second_intersect_naive: AtomicU64,
 
     pub first_result: AtomicU64,
@@ -131,6 +133,13 @@ impl Debug for Stats {
                 ),
             )
             .field(
+                "    first_intersect_binary",
+                &format_args!(
+                    "({:.3}ms)",
+                    self.first_intersect_binary.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
                 "    first_intersect_naive",
                 &format_args!(
                     "({:.3}ms)",
@@ -156,6 +165,13 @@ impl Debug for Stats {
                 &format_args!(
                     "({:.3}ms)",
                     self.second_intersect_simd.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "    second_intersect_binary",
+                &format_args!(
+                    "({:.3}ms)",
+                    self.second_intersect_binary.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
@@ -771,12 +787,16 @@ where
         let mut rhs_len = rhs.len() as u32;
         let rhs = token_to_packed.get(rhs).unwrap();
 
+        // let b = std::time::Instant::now();
         let mut result = lhs.intersect::<I>(*rhs, lhs_len, stats);
         let mut result_borrow = BorrowRoaringishPacked::new(&result);
+        // println!("{}", b.elapsed().as_micros() as f64 / 1000f64);
 
         let mut left_i = i.wrapping_sub(1);
         let mut right_i = i + 2;
 
+        // let b = std::time::Instant::now();
+        let mut k = 0;
         loop {
             let lhs = final_tokens.get(left_i);
             let rhs = final_tokens.get(right_i);
@@ -823,7 +843,14 @@ where
                 },
                 (None, None) => break,
             }
+
+            if result.len() == 0 {
+                panic!("{k}");
+            }
+            k += 1;
         }
+        // println!("{}", b.elapsed().as_micros() as f64 / 1000f64);
+        // println!("----------------");
 
         result_borrow.get_doc_ids()
     }
