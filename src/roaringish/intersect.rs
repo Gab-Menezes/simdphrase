@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 
 use crate::{allocator::Aligned64, Stats};
 
-use super::{Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP};
+use super::{Aligned, BorrowRoaringishPacked};
 
 pub mod naive;
 pub mod simd;
@@ -17,7 +17,7 @@ pub trait Intersect: private::IntersectSeal {
     fn intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
-        lhs_len: u32,
+        lhs_len: u16,
 
         stats: &Stats,
     ) -> (Vec<u64, Aligned64>, Vec<u64, Aligned64>) {
@@ -37,9 +37,6 @@ pub trait Intersect: private::IntersectSeal {
             Box::new_uninit_slice_in(0, Aligned64::default())
         };
 
-        let add_to_group = (lhs_len / 16) as u64 * ADD_ONE_GROUP;
-        let lhs_len = (lhs_len % 16) as u16;
-
         let msb_mask = !(u16::MAX >> lhs_len);
         let lsb_mask = !(u16::MAX << lhs_len);
 
@@ -52,7 +49,6 @@ pub trait Intersect: private::IntersectSeal {
             &mut i,
             &mut msb_packed_result,
             &mut j,
-            add_to_group,
             lhs_len,
             msb_mask,
             lsb_mask,
@@ -87,7 +83,6 @@ pub trait Intersect: private::IntersectSeal {
         msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
 
-        add_to_group: u64,
         lhs_len: u16,
         msb_mask: u16,
         lsb_mask: u16,

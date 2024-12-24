@@ -63,13 +63,11 @@ pub struct Stats {
     pub first_binary_search: AtomicU64,
     pub first_intersect: AtomicU64,
     pub first_intersect_simd: AtomicU64,
-    pub first_intersect_binary: AtomicU64,
     pub first_intersect_naive: AtomicU64,
 
     pub second_binary_search: AtomicU64,
     pub second_intersect: AtomicU64,
     pub second_intersect_simd: AtomicU64,
-    pub second_intersect_binary: AtomicU64,
     pub second_intersect_naive: AtomicU64,
 
     pub first_result: AtomicU64,
@@ -133,13 +131,6 @@ impl Debug for Stats {
                 ),
             )
             .field(
-                "    first_intersect_binary",
-                &format_args!(
-                    "({:.3}ms)",
-                    self.first_intersect_binary.load(Relaxed) as f64 / 1000f64
-                ),
-            )
-            .field(
                 "    first_intersect_naive",
                 &format_args!(
                     "({:.3}ms)",
@@ -165,13 +156,6 @@ impl Debug for Stats {
                 &format_args!(
                     "({:.3}ms)",
                     self.second_intersect_simd.load(Relaxed) as f64 / 1000f64
-                ),
-            )
-            .field(
-                "    second_intersect_binary",
-                &format_args!(
-                    "({:.3}ms)",
-                    self.second_intersect_binary.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .field(
@@ -767,91 +751,28 @@ where
                 .get_doc_ids();
         }
 
-        let mut min = usize::MAX;
-        let mut i = usize::MAX;
-        for (j, ts) in final_tokens.windows(2).enumerate() {
-            let l0 = token_to_packed.get(&ts[0]).unwrap().len();
-            let l1 = token_to_packed.get(&ts[1]).unwrap().len();
-            let l = l0 + l1;
-            if l <= min {
-                i = j;
-                min = l;
-            }
-        }
+        let mut it = final_tokens.iter();
 
-        let lhs = &final_tokens[i];
-        let mut lhs_len = lhs.len() as u32;
+        let lhs = it.next().unwrap();
+        let lhs_len = lhs.len() as u16;
         let lhs = token_to_packed.get(lhs).unwrap();
 
-        let rhs = &final_tokens[i+1];
-        let mut rhs_len = rhs.len() as u32;
+        let rhs = it.next().unwrap();
+        let rhs_len = rhs.len() as u16;
         let rhs = token_to_packed.get(rhs).unwrap();
 
-        // let b = std::time::Instant::now();
-        let mut result = lhs.intersect::<I>(*rhs, lhs_len, stats);
-        let mut result_borrow = BorrowRoaringishPacked::new(&result);
-        // println!("{}", b.elapsed().as_micros() as f64 / 1000f64);
+        let mut lhs = lhs.intersect::<I>(*rhs, lhs_len, stats);
+        let mut borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+        let mut lhs_len = rhs_len;
 
-        let mut left_i = i.wrapping_sub(1);
-        let mut right_i = i + 2;
-
-        // let b = std::time::Instant::now();
-        let mut k = 0;
-        loop {
-            let lhs = final_tokens.get(left_i);
-            let rhs = final_tokens.get(right_i);
-            match (lhs, rhs) {
-                (Some(t_lhs), Some(t_rhs)) => {
-                    let lhs = token_to_packed.get(t_lhs).unwrap();
-                    let rhs = token_to_packed.get(t_rhs).unwrap();
-                    if lhs.len() <= rhs.len() {
-                        lhs_len += t_lhs.len() as u32;
-
-                        result = lhs.intersect::<I>(result_borrow, lhs_len, stats);
-                        result_borrow = BorrowRoaringishPacked::new(&result);
-
-                        left_i = left_i.wrapping_sub(1);
-                    } else {
-                        result = result_borrow.intersect::<I>(*rhs, rhs_len, stats);
-                        result_borrow = BorrowRoaringishPacked::new(&result);
-    
-                        lhs_len += rhs_len;
-                        rhs_len = t_rhs.len() as u32;
-
-                        right_i += 1;
-                    }
-                },
-                (Some(t_lhs), None) => {
-                    let lhs = token_to_packed.get(t_lhs).unwrap();
-                    lhs_len += t_lhs.len() as u32;
-
-                    result = lhs.intersect::<I>(result_borrow, lhs_len, stats);
-                    result_borrow = BorrowRoaringishPacked::new(&result);
-
-                    left_i = left_i.wrapping_sub(1);
-                },
-                (None, Some(t_rhs)) => {
-                    let rhs = token_to_packed.get(t_rhs).unwrap();
-
-                    result = result_borrow.intersect::<I>(*rhs, rhs_len, stats);
-                    result_borrow = BorrowRoaringishPacked::new(&result);
-
-                    lhs_len += rhs_len;
-                    rhs_len = t_rhs.len() as u32;
-
-                    right_i += 1;
-                },
-                (None, None) => break,
-            }
-
-            if result.len() == 0 {
-                panic!("{k}");
-            }
-            k += 1;
+        for t in it {
+            let rhs = token_to_packed.get(t).unwrap();
+            lhs = borrow_lhs.intersect::<I>(*rhs, lhs_len, stats);
+            borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+            lhs_len = t.len() as u16;
         }
-        // println!("{}", b.elapsed().as_micros() as f64 / 1000f64);
-        // println!("----------------");
 
-        result_borrow.get_doc_ids()
+        borrow_lhs = BorrowRoaringishPacked::new(&lhs);
+        borrow_lhs.get_doc_ids()
     }
 }
