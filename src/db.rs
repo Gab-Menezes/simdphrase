@@ -1,7 +1,7 @@
 use std::{
     borrow::Borrow,
     cmp::Reverse,
-    collections::{BTreeSet, BinaryHeap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeSet, BinaryHeap, HashMap, HashSet},
     fmt::Debug,
     fs::File,
     io::BufWriter,
@@ -72,6 +72,8 @@ pub struct Stats {
 
     pub first_result: AtomicU64,
     pub second_result: AtomicU64,
+
+    pub get_doc_ids: AtomicU64,
 }
 
 impl Debug for Stats {
@@ -83,16 +85,20 @@ impl Debug for Stats {
             + self.second_binary_search.load(Relaxed)
             + self.second_intersect.load(Relaxed)
             + self.first_result.load(Relaxed)
-            + self.second_result.load(Relaxed);
+            + self.second_result.load(Relaxed)
+            + self.get_doc_ids.load(Relaxed);
 
         let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64 * 100f64;
         let merge = self.merge.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let first_binary_search = self.first_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let first_binary_search =
+            self.first_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
         let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let second_binary_search = self.second_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let second_binary_search =
+            self.second_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
         let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
         let first_result = self.first_result.load(Relaxed) as f64 / sum as f64 * 100f64;
         let second_result = self.second_result.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let get_doc_ids = self.get_doc_ids.load(Relaxed) as f64 / sum as f64 * 100f64;
 
         f.debug_struct("Stats")
             .field(
@@ -177,6 +183,13 @@ impl Debug for Stats {
                 &format_args!(
                     "({:.3}ms, {second_result:.3}%)",
                     self.second_result.load(Relaxed) as f64 / 1000f64
+                ),
+            )
+            .field(
+                "get_doc_ids",
+                &format_args!(
+                    "({:.3}ms, {get_doc_ids:.3}%)",
+                    self.get_doc_ids.load(Relaxed) as f64 / 1000f64
                 ),
             )
             .finish()
@@ -537,6 +550,38 @@ where
         Vec<&'b [&'c str]>,
         AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
     ) {
+        #[inline(always)]
+        fn check_1<'a, 'b, 'c, D>(
+            me: &DB<D>,
+            rotxn: &RoTxn,
+            tokens: &'b [&'c str],
+            token_to_packed: &mut AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
+            mmap: &'a Mmap,
+            memo_token_to_score_choices: &mut AHashMap<&'b [&'c str], (usize, Vec<&'b [&'c str]>)>,
+        ) -> Option<usize>
+        where
+            D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
+                + Archive
+                + 'static,
+        {
+            if tokens.len() != 1 {
+                return None;
+            }
+            let score = match token_to_packed.entry(tokens) {
+                Entry::Occupied(e) => e.get().len(),
+                Entry::Vacant(e) => match me.get_roaringish_packed(rotxn, &tokens[0], mmap) {
+                    Some(packed) => {
+                        let score = packed.len();
+                        e.insert(packed);
+                        memo_token_to_score_choices.insert(tokens, (score, vec![tokens]));
+                        score
+                    }
+                    None => 0,
+                },
+            };
+            Some(score)
+        }
+
         // TODO: improve this, temporary code just to make sure things working
         // maybe use smallvec ?
         fn inner_merge_and_minimize_tokens<'a, 'b, 'c, D>(
@@ -547,36 +592,14 @@ where
             token_to_packed: &mut AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
             mmap: &'a Mmap,
             memo_token_to_score_choices: &mut AHashMap<&'b [&'c str], (usize, Vec<&'b [&'c str]>)>,
+
+            // count: &mut usize,
         ) -> usize
         where
             D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
                 + Archive
                 + 'static,
         {
-            if let Some(r) = memo_token_to_score_choices.get(tokens) {
-                return r.0;
-            }
-
-            if tokens.len() == 1 {
-                let score = match token_to_packed.get(tokens) {
-                    Some(packed) => packed.len(),
-                    None => {
-                        let concatened: String =
-                            tokens.into_iter().copied().intersperse(" ").collect();
-                        match me.get_roaringish_packed(rotxn, &concatened, mmap) {
-                            Some(packed) => {
-                                let score = packed.len();
-                                token_to_packed.insert(tokens, packed);
-                                score
-                            }
-                            None => return 0,
-                        }
-                    }
-                };
-                memo_token_to_score_choices.insert(tokens, (score, vec![tokens]));
-                return score;
-            }
-
             let mut final_score = usize::MAX;
             let mut choices = Vec::new();
 
@@ -594,16 +617,15 @@ where
 
             for i in (1..end).rev() {
                 let (tokens, rem) = tokens.split_at(i);
-
-                let score = match token_to_packed.get(tokens) {
-                    Some(packed) => packed.len(),
-                    None => {
+                let score = match token_to_packed.entry(tokens) {
+                    Entry::Occupied(e) => e.get().len(),
+                    Entry::Vacant(e) => {
                         let concatened: String =
                             tokens.into_iter().copied().intersperse(" ").collect();
                         match me.get_roaringish_packed(rotxn, &concatened, mmap) {
                             Some(packed) => {
                                 let score = packed.len();
-                                token_to_packed.insert(tokens, packed);
+                                e.insert(packed);
                                 score
                             }
                             None => return 0,
@@ -613,15 +635,30 @@ where
 
                 let mut rem_score = 0;
                 if !rem.is_empty() {
-                    rem_score = inner_merge_and_minimize_tokens(
-                        me,
-                        rotxn,
-                        rem,
-                        common_tokens,
-                        token_to_packed,
-                        mmap,
-                        memo_token_to_score_choices,
-                    );
+                    rem_score = match memo_token_to_score_choices.get(rem) {
+                        Some(r) => r.0,
+                        None => {
+                            match check_1(
+                                me,
+                                rotxn,
+                                rem,
+                                token_to_packed,
+                                mmap,
+                                memo_token_to_score_choices,
+                            ) {
+                                Some(score) => score,
+                                None => inner_merge_and_minimize_tokens(
+                                    me,
+                                    rotxn,
+                                    rem,
+                                    common_tokens,
+                                    token_to_packed,
+                                    mmap,
+                                    memo_token_to_score_choices,
+                                ),
+                            }
+                        }
+                    };
                     if rem_score == 0 {
                         return 0;
                     }
@@ -661,15 +698,34 @@ where
         let mut memo_token_to_score_choices = AHashMap::with_capacity(len);
         let mut token_to_packed = AHashMap::with_capacity(len);
 
-        let score = inner_merge_and_minimize_tokens(
+        let score = match check_1(
             self,
             rotxn,
             tokens,
-            common_tokens,
             &mut token_to_packed,
             mmap,
             &mut memo_token_to_score_choices,
-        );
+        ) {
+            Some(score) => score,
+            None => inner_merge_and_minimize_tokens(
+                self,
+                rotxn,
+                tokens,
+                common_tokens,
+                &mut token_to_packed,
+                mmap,
+                &mut memo_token_to_score_choices,
+            ),
+        };
+        // println!("reserved: {}", len);
+        // println!(
+        //     "memo_token_to_score_choices: {}",
+        //     memo_token_to_score_choices.len()
+        // );
+        // println!("token_to_packed: {}", token_to_packed.len());
+        // println!("tokens: {}", tokens.len());
+        // println!("calls: {count}");
+        // println!("score: {score}");
         if score == 0 {
             return (Vec::new(), AHashMap::new());
         }
@@ -729,7 +785,7 @@ where
         if tokens.len() == 1 {
             return self
                 .get_roaringish_packed(&rotxn, tokens.first().unwrap(), mmap)
-                .map(|p| p.get_doc_ids())
+                .map(|p| p.get_doc_ids(stats))
                 .unwrap_or_default();
         }
 
@@ -748,7 +804,7 @@ where
             return token_to_packed
                 .get(final_tokens.first().unwrap())
                 .unwrap()
-                .get_doc_ids();
+                .get_doc_ids(stats);
         }
 
         let mut it = final_tokens.iter();
@@ -773,6 +829,6 @@ where
         }
 
         borrow_lhs = BorrowRoaringishPacked::new(&lhs);
-        borrow_lhs.get_doc_ids()
+        borrow_lhs.get_doc_ids(stats)
     }
 }

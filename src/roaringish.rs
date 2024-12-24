@@ -7,7 +7,7 @@ use rkyv::{
 };
 use std::{
     arch::x86_64::{
-        __m256i, __m512i, _mm256_mask_compressstoreu_epi16, _mm512_mask_compressstoreu_epi64,
+        __m256i, __m512i, _mm256_mask_compressstoreu_epi16, _mm256_mask_compressstoreu_epi32, _mm512_mask_compressstoreu_epi32, _mm512_mask_compressstoreu_epi64
     },
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
@@ -76,6 +76,15 @@ where
 
 const fn unpack_doc_id(packed: u64) -> u32 {
     (packed >> 32) as u32
+}
+
+#[allow(unused)]
+#[inline(always)]
+fn unpack_doc_id_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u32, N> 
+where
+    LaneCount<N>: SupportedLaneCount
+{
+    (packed >> Simd::splat(32)).cast()
 }
 
 const fn unpack_group(packed: u64) -> u16 {
@@ -420,7 +429,9 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
 }
 
 impl<'a, A> BorrowRoaringishPacked<'a, A> {
-    pub fn get_doc_ids(&self) -> Vec<u32> {
+    #[cfg(not(target_feature = "avx512f"))]
+    #[inline(always)]
+    pub fn get_doc_ids(&self, stats: &Stats) -> Vec<u32> {
         if self.0.is_empty() {
             return Vec::new();
         }
@@ -428,6 +439,8 @@ impl<'a, A> BorrowRoaringishPacked<'a, A> {
         if self.0.len() == 1 {
             return vec![unpack_doc_id(self.0[0])];
         }
+
+        let b = std::time::Instant::now();
 
         let mut doc_ids: Box<[MaybeUninit<u32>]> = Box::new_uninit_slice(self.0.len());
         let mut i = 0;
@@ -447,6 +460,84 @@ impl<'a, A> BorrowRoaringishPacked<'a, A> {
                 .write(unpack_doc_id(*self.0.last().unwrap_unchecked()))
         };
         i += 1;
+
+        stats
+            .get_doc_ids
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+
+        unsafe { Vec::from_raw_parts(Box::into_raw(doc_ids) as *mut _, i, self.0.len()) }
+    }
+
+    #[cfg(target_feature = "avx512f")]
+    #[inline(always)]
+    pub fn get_doc_ids(&self, stats: &Stats) -> Vec<u32> {
+        if self.0.is_empty() {
+            return Vec::new();
+        }
+
+        if self.0.len() == 1 {
+            return vec![unpack_doc_id(self.0[0])];
+        }
+
+        let b = std::time::Instant::now();
+
+        let mut doc_ids: Box<[MaybeUninit<u32>]> = Box::new_uninit_slice(self.0.len());
+        let mut i = 0;
+
+        unsafe {
+            doc_ids
+                .get_unchecked_mut(i)
+                .write(unpack_doc_id(self.0[0]))
+        };
+        i += 1;
+
+        let mut last_doc_id = unpack_doc_id(self.0[0]);
+        let (l, m, r) = self.0.as_simd::<8>();
+        assert!(l.is_empty());
+        for packed in m {
+            let doc_id = unpack_doc_id_simd(*packed);
+            let rot = doc_id.rotate_elements_right::<1>();
+            let first = doc_id.as_array()[0];
+            let last = doc_id.as_array()[7];
+
+            let include_first = (first != last_doc_id) as u8;
+            let mask = (doc_id.simd_ne(rot).to_bitmask() as u8 & !1) | include_first;
+            
+            unsafe {
+                // TODO: avoid compressstore on zen4
+                _mm256_mask_compressstoreu_epi32(
+                    doc_ids.as_mut_ptr().add(i) as *mut _,
+                    mask,
+                    doc_id.into(),
+                );
+            }
+            i += mask.count_ones() as usize;
+            last_doc_id = last;
+        }
+
+        let j = r.into_iter().take_while(|packed| unpack_doc_id(**packed) == last_doc_id).count();
+        let r = &r[j..];
+        for [packed0, packed1] in r.array_windows::<2>() {
+            let doc_id0 = unpack_doc_id(*packed0);
+            let doc_id1 = unpack_doc_id(*packed1);
+            if doc_id0 != doc_id1 {
+                unsafe { doc_ids.get_unchecked_mut(i).write(doc_id0) };
+                i += 1;
+            }
+        }
+
+        if r.len() >= 1 {
+            unsafe {
+                doc_ids
+                    .get_unchecked_mut(i)
+                    .write(unpack_doc_id(*r.last().unwrap_unchecked()))
+            };
+            i += 1;
+        }
+
+        stats
+            .get_doc_ids
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         unsafe { Vec::from_raw_parts(Box::into_raw(doc_ids) as *mut _, i, self.0.len()) }
     }
