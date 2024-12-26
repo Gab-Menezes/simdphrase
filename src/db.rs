@@ -1,15 +1,9 @@
+use core::range::RangeFrom;
 use std::{
-    borrow::Borrow,
-    cmp::Reverse,
-    collections::{hash_map::Entry, BTreeSet, BinaryHeap, HashMap, HashSet},
-    fmt::Debug,
-    fs::File,
-    io::BufWriter,
-    num::NonZero,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
-    u32,
+    alloc::Layout, borrow::Borrow, cmp::Reverse, collections::{
+        hash_map::{Entry, RawEntryMut},
+        BTreeSet, BinaryHeap, HashMap, HashSet,
+    }, fmt::Debug, fs::File, hash::Hash, io::BufWriter, mem::MaybeUninit, num::NonZero, ops::Index, path::{Path, PathBuf}, slice::SliceIndex, str::FromStr, sync::atomic::{AtomicU64, Ordering::Relaxed}, u32
 };
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
@@ -42,6 +36,114 @@ use crate::{
     },
     tokenize, BorrowRoaringishPacked, RoaringishPacked,
 };
+
+struct Tokens {
+    tokens: String,
+    positions: Vec<(usize, usize)>,
+}
+
+impl Tokens {
+    fn new(q: &str) -> Self {
+        let q = normalize(q);
+        let mut start = 0;
+        let mut tokens = String::with_capacity(q.len() + 1);
+        let mut positions = Vec::with_capacity(q.len() + 1);
+
+        for token in tokenize(&q) {
+            tokens.push_str(token);
+            tokens.push(' ');
+
+            let b = start;
+            let e = b + token.len();
+            start = e + 1;
+            positions.push((b, e));
+        }
+        tokens.pop();
+
+        Self { tokens, positions }
+    }
+
+    fn as_ref(&self) -> RefTokens {
+        RefTokens {
+            tokens: &self.tokens,
+            positions: &self.positions,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RefTokens<'a> {
+    tokens: &'a str,
+    positions: &'a [(usize, usize)],
+}
+
+impl<'a> RefTokens<'a> {
+    fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn first(&self) -> Option<&str> {
+        self.positions.first().map(|(b, e)| &self.tokens[*b..*e])
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &str> {
+        self.positions.iter().map(|(b, e)| &self.tokens[*b..*e])
+    }
+
+    fn range(&self) -> (usize, usize) {
+        let (b, _) = self.positions.first().unwrap_or(&(0, 0));
+        let (_, e) = self.positions.last().unwrap_or(&(0, 0));
+        (*b, *e)
+    }
+
+    fn tokens(&self) -> &str {
+        let (b, e) = self.range();
+        &self.tokens[b..e]
+    }
+
+    fn split_at(&self, i: usize) -> (Self, Self) {
+        let (l, r) = self.positions.split_at(i);
+        (
+            Self {
+                tokens: self.tokens,
+                positions: l,
+            },
+            Self {
+                tokens: self.tokens,
+                positions: r,
+            },
+        )
+    }
+}
+
+impl<'a> PartialEq for RefTokens<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        let t0 = self.tokens();
+        let t1 = other.tokens();
+        t0 == t1
+    }
+}
+
+impl<'a> Eq for RefTokens<'a> {}
+
+impl<'a> Hash for RefTokens<'a> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.tokens().hash(state);
+    }
+}
+
+impl<'a> Index<usize> for RefTokens<'a> {
+    type Output = str;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        let (b, e) = self.positions[index];
+        &self.tokens[b..e]
+    }
+}
 
 #[derive(Archive, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct BorrowStr<'a>(#[rkyv(with = InlineAsBox)] &'a str);
@@ -540,33 +642,34 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn merge_and_minimize_tokens<'a, 'b, 'c>(
+    pub(crate) fn merge_and_minimize_tokens<'a, 'b>(
         &self,
         rotxn: &RoTxn,
-        tokens: &'b [&'c str],
+        tokens: RefTokens<'a>,
         common_tokens: &HashSet<Box<str>>,
-        mmap: &'a Mmap,
+        mmap: &'b Mmap,
     ) -> (
-        Vec<&'b [&'c str]>,
-        AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
+        Vec<RefTokens<'a>>,
+        AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
     ) {
         #[inline(always)]
-        fn check_1<'a, 'b, 'c, D>(
+        fn check_before_recursion<'a, 'b, D>(
             me: &DB<D>,
             rotxn: &RoTxn,
-            tokens: &'b [&'c str],
-            token_to_packed: &mut AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
-            mmap: &'a Mmap,
-            memo_token_to_score_choices: &mut AHashMap<&'b [&'c str], (usize, Vec<&'b [&'c str]>)>,
+            tokens: RefTokens<'a>,
+            token_to_packed: &mut AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+            mmap: &'b Mmap,
+            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, Vec<RefTokens<'a>>)>,
         ) -> Option<usize>
         where
-            D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
+            D: for<'c> Serialize<HighSerializer<AlignedVec, ArenaHandle<'c>, rkyv::rancor::Error>>
                 + Archive
                 + 'static,
         {
             if tokens.len() != 1 {
                 return None;
             }
+
             let score = match token_to_packed.entry(tokens) {
                 Entry::Occupied(e) => e.get().len(),
                 Entry::Vacant(e) => match me.get_roaringish_packed(rotxn, &tokens[0], mmap) {
@@ -584,45 +687,44 @@ where
 
         // TODO: improve this, temporary code just to make sure things working
         // maybe use smallvec ?
-        fn inner_merge_and_minimize_tokens<'a, 'b, 'c, D>(
+        fn inner_merge_and_minimize_tokens<'a, 'b, 'c, 'alloc, D>(
             me: &DB<D>,
             rotxn: &RoTxn,
-            tokens: &'b [&'c str],
+            tokens: RefTokens<'a>,
             common_tokens: &HashSet<Box<str>>,
-            token_to_packed: &mut AHashMap<&'b [&'c str], BorrowRoaringishPacked<'a, Aligned>>,
-            mmap: &'a Mmap,
-            memo_token_to_score_choices: &mut AHashMap<&'b [&'c str], (usize, Vec<&'b [&'c str]>)>,
-
-            // count: &mut usize,
+            token_to_packed: &mut AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+            mmap: &'b Mmap,
+            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, Vec<RefTokens<'a>>)>, // count: &mut usize,
         ) -> usize
         where
             D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
                 + Archive
                 + 'static,
         {
+            const { assert!(MAX_WINDOW_LEN.get() == 3) };
             let mut final_score = usize::MAX;
             let mut choices = Vec::new();
 
             // TODO: fix this, it looks ugly
-            let mut end = tokens[1..]
-                .into_iter()
+            let mut end = tokens
+                .iter()
+                .skip(1)
                 .take(MAX_WINDOW_LEN.get() - 1)
-                .take_while(|t| common_tokens.contains(**t))
+                .take_while(|t| common_tokens.contains(*t))
                 .count()
                 + 2;
-            if common_tokens.contains(tokens[0]) {
+            if common_tokens.contains(&tokens[0]) {
                 end += 1;
             }
             end = end.min(MAX_WINDOW_LEN.get() + 1).min(tokens.len() + 1);
 
             for i in (1..end).rev() {
                 let (tokens, rem) = tokens.split_at(i);
+
                 let score = match token_to_packed.entry(tokens) {
                     Entry::Occupied(e) => e.get().len(),
                     Entry::Vacant(e) => {
-                        let concatened: String =
-                            tokens.into_iter().copied().intersperse(" ").collect();
-                        match me.get_roaringish_packed(rotxn, &concatened, mmap) {
+                        match me.get_roaringish_packed(rotxn, tokens.tokens(), mmap) {
                             Some(packed) => {
                                 let score = packed.len();
                                 e.insert(packed);
@@ -635,10 +737,10 @@ where
 
                 let mut rem_score = 0;
                 if !rem.is_empty() {
-                    rem_score = match memo_token_to_score_choices.get(rem) {
+                    rem_score = match memo_token_to_score_choices.get(&rem) {
                         Some(r) => r.0,
                         None => {
-                            match check_1(
+                            match check_before_recursion(
                                 me,
                                 rotxn,
                                 rem,
@@ -669,7 +771,7 @@ where
                     final_score = calc_score;
                     choices.clear();
                     choices.push(tokens);
-                    if let Some((_, rem_choices)) = memo_token_to_score_choices.get(rem) {
+                    if let Some((_, rem_choices)) = memo_token_to_score_choices.get(&rem) {
                         choices.extend(rem_choices.into_iter());
                     };
                 }
@@ -679,18 +781,19 @@ where
             final_score
         }
 
-        if common_tokens.is_empty() {
-            let mut choices = Vec::with_capacity(tokens.len());
-            let mut token_to_packed = AHashMap::with_capacity(tokens.len());
-            for i in 0..tokens.len() {
-                match self.get_roaringish_packed(rotxn, tokens[i], mmap) {
-                    Some(packed) => token_to_packed.insert(tokens, packed),
-                    None => return (Vec::new(), AHashMap::new()),
-                };
-                choices.push(&tokens[i..i + 1]);
-            }
-            return (choices, token_to_packed);
-        }
+        // TODO: FIX
+        // if common_tokens.is_empty() {
+        //     let mut choices = Vec::with_capacity(tokens.len());
+        //     let mut token_to_packed = AHashMap::with_capacity(tokens.len());
+        //     for token in tokens.iter() {
+        //         match self.get_roaringish_packed(rotxn, token, mmap) {
+        //             Some(packed) => token_to_packed.insert(token, packed),
+        //             None => return (Vec::new(), AHashMap::new()),
+        //         };
+        //         choices.push(token);
+        //     }
+        //     return (choices, token_to_packed);
+        // }
 
         let n = MAX_WINDOW_LEN.get();
         let l = tokens.len();
@@ -698,7 +801,7 @@ where
         let mut memo_token_to_score_choices = AHashMap::with_capacity(len);
         let mut token_to_packed = AHashMap::with_capacity(len);
 
-        let score = match check_1(
+        let score = match check_before_recursion(
             self,
             rotxn,
             tokens,
@@ -717,6 +820,7 @@ where
                 &mut memo_token_to_score_choices,
             ),
         };
+
         // println!("reserved: {}", len);
         // println!(
         //     "memo_token_to_score_choices: {}",
@@ -726,10 +830,11 @@ where
         // println!("tokens: {}", tokens.len());
         // println!("calls: {count}");
         // println!("score: {score}");
+
         if score == 0 {
             return (Vec::new(), AHashMap::new());
         }
-        match memo_token_to_score_choices.remove(tokens) {
+        match memo_token_to_score_choices.remove(&tokens) {
             Some((_, choices)) => (choices, token_to_packed),
             None => (Vec::new(), AHashMap::new()),
         }
@@ -771,8 +876,8 @@ where
         mmap: &Mmap,
     ) -> Vec<u32> {
         let b = std::time::Instant::now();
-        let q = normalize(q);
-        let tokens: Vec<_> = tokenize(&q).collect();
+        let tokens = Tokens::new(q);
+        let tokens = tokens.as_ref();
         stats
             .normalize_tokenize
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
@@ -791,7 +896,7 @@ where
 
         let b = std::time::Instant::now();
         let (final_tokens, token_to_packed) =
-            self.merge_and_minimize_tokens(&rotxn, &tokens, &common_tokens, mmap);
+            self.merge_and_minimize_tokens(&rotxn, tokens, &common_tokens, mmap);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);

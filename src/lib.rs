@@ -15,6 +15,8 @@
 #![feature(str_as_str)]
 #![feature(pointer_is_aligned_to)]
 #![feature(array_chunks)]
+#![feature(maybe_uninit_slice)]
+#![feature(new_range_api)]
 
 mod codecs;
 mod db;
