@@ -40,6 +40,12 @@ incremental = false
 rustflags = [
     "-C", "target-cpu=native", 
     "-Z", "tune-cpu=native",
+    "-C", "llvm-args=-align-all-functions=6",
+    # "-C", "llvm-args=-align-all-nofallthru-blocks=6",
+    # "-C", "llvm-args=-align-loops=64",
+
+
+
     # "-C", "target-feature=-avx512f",
     # "-C", "target-feature=-avx512vp2intersect",
 ]

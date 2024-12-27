@@ -164,7 +164,7 @@ impl Intersect for SimdIntersect {
         // assuming that fuctions will be 64 byte aligned, it's fairly easy to find
         // the new value once the code of the parent function changes
         if !FIRST {
-            for _ in 0..16 {
+            for _ in 0..32 {
                 unsafe {
                     asm!("nop");
                 }

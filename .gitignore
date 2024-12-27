@@ -8,3 +8,7 @@
 *.txt
 /msmarco*
 *.jsonl
+roaringish_packed
+**.asm
+**.svg
+**.data

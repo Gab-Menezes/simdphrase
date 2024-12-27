@@ -43,6 +43,7 @@
           pkgs.clang_19
           pkgs.llvmPackages_19.bintools
           pkgs.bolt_19
+          pkgs.rustfilt
         ];
 
         #LD_LIBRARY_PATH = libPath;
