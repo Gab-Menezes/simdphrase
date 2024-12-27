@@ -252,6 +252,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         Self(packed, PhantomData)
     }
 
+    #[inline(never)]
     pub fn intersect<I: Intersect>(
         self,
         mut rhs: Self,

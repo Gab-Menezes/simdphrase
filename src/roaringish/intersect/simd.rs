@@ -5,11 +5,11 @@ use std::{
     simd::{cmp::SimdPartialOrd, Simd},
 };
 use std::{
-    arch::x86_64::{
+    arch::{asm, x86_64::{
         _mm512_load_epi64, _mm512_mask_compressstoreu_epi64, _mm512_maskz_compress_epi64,
         _mm512_storeu_epi64, _mm_load_si128, _mm_loadu_epi16, _mm_mask_compressstoreu_epi16,
         _mm_maskz_compress_epi16, _mm_storeu_epi16,
-    },
+    }},
     simd::num::SimdUint,
     sync::atomic::Ordering::Relaxed,
 };
@@ -31,7 +31,7 @@ const N: usize = 8;
 #[cfg(target_feature = "avx512vp2intersect")]
 #[inline(always)]
 unsafe fn vp2intersectq(a: __m512i, b: __m512i) -> (u8, u8) {
-    use std::arch::{asm, x86_64::__mmask8};
+    use std::arch::x86_64::__mmask8;
 
     let mut mask0: __mmask8;
     let mut mask1: __mmask8;
@@ -151,6 +151,25 @@ impl Intersect for SimdIntersect {
         assert_eq!(rhs_packed.len() % N, 0);
 
         let mut need_to_analyze_msb = false;
+
+        // The first intersection will always fit into 4 pages, so no need to manually
+        // align the loop. Since it's size is 197 bytes > 64*3 = 192 bytes. If in the
+        // future we can reduce the size of the loop in at least 5 bytes we can fit it
+        // in 3 pages, the same way we fit the second intersection
+
+        // Forces the alignment of the loop to be at the begining of a 64 bytes page
+        // making it fit in only 3 pages, instead of 4 (up 50% faster execution).
+        // Since this function is inlined the alignment of the loop is based on the
+        // parent function alignment, so this value will change in the future, but
+        // assuming that fuctions will be 64 byte aligned, it's fairly easy to find
+        // the new value once the code of the parent function changes
+        if !FIRST {
+            for _ in 0..16 {
+                unsafe {
+                    asm!("nop");
+                }
+            }
+        }
 
         while *lhs_i < lhs_packed.len() && *rhs_i < rhs_packed.len() {
             // Don't move this code around

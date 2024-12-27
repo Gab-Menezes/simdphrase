@@ -14,6 +14,7 @@ mod private {
 }
 
 pub trait Intersect: private::IntersectSeal {
+    #[inline(always)]
     fn intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
