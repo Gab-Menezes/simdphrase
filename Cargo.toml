@@ -31,6 +31,13 @@ harness = false
 name = "add"
 harness = false
 
+[profile.dev]
+rustflags = [
+    "-C", "target-cpu=native", 
+    "-Z", "tune-cpu=native",
+    "-C", "llvm-args=-align-all-functions=6",
+]
+
 [profile.release]
 debug = true
 codegen-units = 1

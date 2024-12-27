@@ -1,13 +1,7 @@
-use core::range::RangeFrom;
-use std::{
-    alloc::Layout, borrow::Borrow, cmp::Reverse, collections::{
-        hash_map::{Entry, RawEntryMut},
-        BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList,
-    }, fmt::Debug, fs::File, hash::Hash, io::BufWriter, mem::MaybeUninit, num::NonZero, ops::Index, path::{Path, PathBuf}, rc::Rc, slice::SliceIndex, str::FromStr, sync::atomic::{AtomicU64, Ordering::Relaxed}, u32
-};
-use gxhash::{HashMap as GxHashMap, HashMapExt};
 use bumpalo::Bump;
+use core::range::RangeFrom;
 use fxhash::{FxHashMap, FxHashSet};
+use gxhash::{HashMap as GxHashMap, HashMapExt};
 use heed::{
     types::Str, Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
     Unspecified,
@@ -24,6 +18,29 @@ use rkyv::{
     vec::{ArchivedVec, VecResolver},
     with::{Inline, InlineAsBox},
     Archive, Archived, Deserialize, Place, Serialize,
+};
+use std::{
+    alloc::Layout,
+    borrow::Borrow,
+    cmp::Reverse,
+    collections::{
+        hash_map::{Entry, RawEntryMut},
+        BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList,
+    },
+    fmt::Debug,
+    fs::File,
+    hash::Hash,
+    io::BufWriter,
+    iter,
+    mem::MaybeUninit,
+    num::NonZero,
+    ops::Index,
+    path::{Path, PathBuf},
+    rc::Rc,
+    slice::SliceIndex,
+    str::FromStr,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    u32,
 };
 
 use crate::{
@@ -93,11 +110,15 @@ impl<'a> RefTokens<'a> {
     }
 
     fn first(&self) -> Option<&str> {
-        self.positions.first().map(|(b, e)| unsafe { self.tokens.get_unchecked(*b..*e) })
+        self.positions
+            .first()
+            .map(|(b, e)| unsafe { self.tokens.get_unchecked(*b..*e) })
     }
 
     fn iter(&self) -> impl Iterator<Item = &str> {
-        self.positions.iter().map(|(b, e)| unsafe { self.tokens.get_unchecked(*b..*e) })
+        self.positions
+            .iter()
+            .map(|(b, e)| unsafe { self.tokens.get_unchecked(*b..*e) })
     }
 
     fn range(&self) -> (usize, usize) {
@@ -172,12 +193,11 @@ impl<'a, 'alloc> Iterator for RefTokenLinkedListIter<'a, 'alloc> {
             Some(linked_list) => {
                 self.0 = linked_list.next;
                 Some(&linked_list.tokens)
-            },
+            }
             None => None,
         }
     }
 }
-
 
 #[derive(Archive, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct BorrowStr<'a>(#[rkyv(with = InlineAsBox)] &'a str);
@@ -210,6 +230,8 @@ pub struct Stats {
     pub second_result: AtomicU64,
 
     pub get_doc_ids: AtomicU64,
+
+    pub iters: AtomicU64,
 }
 
 impl Debug for Stats {
@@ -223,109 +245,136 @@ impl Debug for Stats {
             + self.first_result.load(Relaxed)
             + self.second_result.load(Relaxed)
             + self.get_doc_ids.load(Relaxed);
+        let sum = sum as f64;
 
-        let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let merge = self.merge.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let first_binary_search =
-            self.first_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let first_intersect = self.first_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let second_binary_search =
-            self.second_binary_search.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let second_intersect = self.second_intersect.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let first_result = self.first_result.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let second_result = self.second_result.load(Relaxed) as f64 / sum as f64 * 100f64;
-        let get_doc_ids = self.get_doc_ids.load(Relaxed) as f64 / sum as f64 * 100f64;
+        let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64;
+        let merge = self.merge.load(Relaxed) as f64;
+        let first_binary_search = self.first_binary_search.load(Relaxed) as f64;
+        let first_intersect = self.first_intersect.load(Relaxed) as f64;
+        let first_intersect_simd = self.first_intersect_simd.load(Relaxed) as f64;
+        let first_intersect_naive = self.first_intersect_naive.load(Relaxed) as f64;
+        let second_binary_search = self.second_binary_search.load(Relaxed) as f64;
+        let second_intersect = self.second_intersect.load(Relaxed) as f64;
+        let second_intersect_simd = self.second_intersect_simd.load(Relaxed) as f64;
+        let second_intersect_naive = self.second_intersect_naive.load(Relaxed) as f64;
+        let first_result = self.first_result.load(Relaxed) as f64;
+        let second_result = self.second_result.load(Relaxed) as f64;
+        let get_doc_ids = self.get_doc_ids.load(Relaxed) as f64;
+        let iters = self.iters.load(Relaxed) as f64;
+
+        let per_normalize_tokenize = normalize_tokenize / sum * 100f64;
+        let per_merge = merge / sum * 100f64;
+        let per_first_binary_search = first_binary_search / sum * 100f64;
+        let per_first_intersect = first_intersect / sum * 100f64;
+        let per_second_binary_search = second_binary_search / sum * 100f64;
+        let per_second_intersect = second_intersect / sum * 100f64;
+        let per_first_result = first_result / sum * 100f64;
+        let per_second_result = second_result / sum * 100f64;
+        let per_get_doc_ids = get_doc_ids / sum * 100f64;
 
         f.debug_struct("Stats")
             .field(
                 "normalize_tokenize",
                 &format_args!(
-                    "({:.3}ms, {normalize_tokenize:.3}%)",
-                    self.normalize_tokenize.load(Relaxed) as f64 / 1000f64
+                    "        ({:08.3}ms, {:08.3}us/iter, {per_normalize_tokenize:06.3}%)",
+                    normalize_tokenize / 1000f64,
+                    normalize_tokenize / iters,
                 ),
             )
             .field(
                 "merge",
                 &format_args!(
-                    "({:.3}ms, {merge:.3}%)",
-                    self.merge.load(Relaxed) as f64 / 1000f64
+                    "                     ({:08.3}ms, {:08.3}us/iter, {per_merge:06.3}%)",
+                    merge / 1000f64,
+                    merge / iters,
                 ),
             )
             .field(
                 "first_binary_search",
                 &format_args!(
-                    "({:.3}ms, {first_binary_search:.3}%)",
-                    self.first_binary_search.load(Relaxed) as f64 / 1000f64
+                    "       ({:08.3}ms, {:08.3}us/iter, {per_first_binary_search:06.3}%)",
+                    first_binary_search / 1000f64,
+                    first_binary_search / iters,
                 ),
             )
             .field(
                 "first_intersect",
                 &format_args!(
-                    "({:.3}ms, {first_intersect:.3}%)",
-                    self.first_intersect.load(Relaxed) as f64 / 1000f64
+                    "           ({:08.3}ms, {:08.3}us/iter, {per_first_intersect:06.3}%)",
+                    first_intersect / 1000f64,
+                    first_intersect / iters,
                 ),
             )
             .field(
                 "    first_intersect_simd",
                 &format_args!(
-                    "({:.3}ms)",
-                    self.first_intersect_simd.load(Relaxed) as f64 / 1000f64
+                    "      ({:08.3}ms, {:08.3}us/iter)",
+                    first_intersect_simd / 1000f64,
+                    first_intersect_simd / iters,
                 ),
             )
             .field(
                 "    first_intersect_naive",
                 &format_args!(
-                    "({:.3}ms)",
-                    self.first_intersect_naive.load(Relaxed) as f64 / 1000f64
+                    "     ({:08.3}ms, {:08.3}us/iter)",
+                    first_intersect_naive / 1000f64,
+                    first_intersect_naive / iters,
                 ),
             )
             .field(
                 "second_binary_search",
                 &format_args!(
-                    "({:.3}ms, {second_binary_search:.3}%)",
-                    self.second_binary_search.load(Relaxed) as f64 / 1000f64
+                    "      ({:08.3}ms, {:08.3}us/iter, {per_second_binary_search:06.3}%)",
+                    second_binary_search / 1000f64,
+                    second_binary_search / iters,
                 ),
             )
             .field(
                 "second_intersect",
                 &format_args!(
-                    "({:.3}ms, {second_intersect:.3}%)",
-                    self.second_intersect.load(Relaxed) as f64 / 1000f64
+                    "          ({:08.3}ms, {:08.3}us/iter, {per_second_intersect:06.3}%)",
+                    second_intersect / 1000f64,
+                    second_intersect / iters,
                 ),
             )
             .field(
                 "    second_intersect_simd",
                 &format_args!(
-                    "({:.3}ms)",
-                    self.second_intersect_simd.load(Relaxed) as f64 / 1000f64
+                    "     ({:08.3}ms, {:08.3}us/iter)",
+                    second_intersect_simd / 1000f64,
+                    second_intersect_simd / iters,
                 ),
             )
             .field(
                 "    second_intersect_naive",
                 &format_args!(
-                    "({:.3}ms)",
-                    self.second_intersect_naive.load(Relaxed) as f64 / 1000f64
+                    "    ({:08.3}ms, {:08.3}us/iter)",
+                    second_intersect_naive / 1000f64,
+                    second_intersect_naive / iters,
                 ),
             )
             .field(
                 "first_result",
                 &format_args!(
-                    "({:.3}ms, {first_result:.3}%)",
-                    self.first_result.load(Relaxed) as f64 / 1000f64
+                    "              ({:08.3}ms, {:08.3}us/iter, {per_first_result:06.3}%)",
+                    first_result / 1000f64,
+                    first_result / iters,
                 ),
             )
             .field(
                 "second_result",
                 &format_args!(
-                    "({:.3}ms, {second_result:.3}%)",
-                    self.second_result.load(Relaxed) as f64 / 1000f64
+                    "             ({:08.3}ms, {:08.3}us/iter, {per_second_result:06.3}%)",
+                    second_result / 1000f64,
+                    second_result / iters,
                 ),
             )
             .field(
                 "get_doc_ids",
                 &format_args!(
-                    "({:.3}ms, {get_doc_ids:.3}%)",
-                    self.get_doc_ids.load(Relaxed) as f64 / 1000f64
+                    "               ({:08.3}ms, {:08.3}us/iter, {per_get_doc_ids:06.3}%)",
+                    get_doc_ids / 1000f64,
+                    get_doc_ids / iters,
                 ),
             )
             .finish()
@@ -695,7 +744,10 @@ where
             tokens: RefTokens<'a>,
             token_to_packed: &mut GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
             mmap: &'b Mmap,
-            memo_token_to_score_choices: &mut GxHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
+            memo_token_to_score_choices: &mut GxHashMap<
+                RefTokens<'a>,
+                (usize, &'alloc RefTokenLinkedList<'a, 'alloc>),
+            >,
             bump: &'alloc Bump,
         ) -> Option<usize>
         where
@@ -714,10 +766,7 @@ where
                         let score = packed.len();
                         e.insert(packed);
 
-                        let linked_list = bump.alloc(RefTokenLinkedList {
-                            tokens,
-                            next: None,
-                        });
+                        let linked_list = bump.alloc(RefTokenLinkedList { tokens, next: None });
                         memo_token_to_score_choices.insert(tokens, (score, linked_list));
                         score
                     }
@@ -736,7 +785,10 @@ where
             common_tokens: &HashSet<Box<str>>,
             token_to_packed: &mut GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
             mmap: &'b Mmap,
-            memo_token_to_score_choices: &mut GxHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
+            memo_token_to_score_choices: &mut GxHashMap<
+                RefTokens<'a>,
+                (usize, &'alloc RefTokenLinkedList<'a, 'alloc>),
+            >,
 
             bump: &'alloc Bump,
         ) -> usize
@@ -792,7 +844,7 @@ where
                                 token_to_packed,
                                 mmap,
                                 memo_token_to_score_choices,
-                                bump
+                                bump,
                             ) {
                                 Some(score) => score,
                                 None => inner_merge_and_minimize_tokens(
@@ -803,7 +855,7 @@ where
                                     token_to_packed,
                                     mmap,
                                     memo_token_to_score_choices,
-                                    bump
+                                    bump,
                                 ),
                             }
                         }
@@ -827,10 +879,7 @@ where
             let choices = match (best_token_choice, best_rem_choice) {
                 (None, None) => return 0,
                 (None, Some(_)) => return 0,
-                (Some(tokens), None) => bump.alloc(RefTokenLinkedList {
-                    tokens,
-                    next: None,
-                }),
+                (Some(tokens), None) => bump.alloc(RefTokenLinkedList { tokens, next: None }),
                 (Some(tokens), Some(rem)) => bump.alloc(RefTokenLinkedList {
                     tokens,
                     next: Some(rem),
@@ -867,7 +916,7 @@ where
             &mut token_to_packed,
             mmap,
             &mut memo_token_to_score_choices,
-            &bump
+            &bump,
         ) {
             Some(score) => score,
             None => inner_merge_and_minimize_tokens(
@@ -878,7 +927,7 @@ where
                 &mut token_to_packed,
                 mmap,
                 &mut memo_token_to_score_choices,
-                &bump
+                &bump,
             ),
         };
 
@@ -936,6 +985,8 @@ where
         common_tokens: &HashSet<Box<str>>,
         mmap: &Mmap,
     ) -> Vec<u32> {
+        stats.iters.fetch_add(1, Relaxed);
+
         let b = std::time::Instant::now();
         let tokens = Tokens::new(q);
         let tokens = tokens.as_ref();
