@@ -5,8 +5,7 @@ use std::{
         BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList,
     }, fmt::Debug, fs::File, hash::Hash, io::BufWriter, mem::MaybeUninit, num::NonZero, ops::Index, path::{Path, PathBuf}, rc::Rc, slice::SliceIndex, str::FromStr, sync::atomic::{AtomicU64, Ordering::Relaxed}, u32
 };
-
-use ahash::{AHashMap, AHashSet, HashMapExt};
+use gxhash::{HashMap as GxHashMap, HashMapExt};
 use bumpalo::Bump;
 use fxhash::{FxHashMap, FxHashSet};
 use heed::{
@@ -94,11 +93,11 @@ impl<'a> RefTokens<'a> {
     }
 
     fn first(&self) -> Option<&str> {
-        self.positions.first().map(|(b, e)| &self.tokens[*b..*e])
+        self.positions.first().map(|(b, e)| unsafe { self.tokens.get_unchecked(*b..*e) })
     }
 
     fn iter(&self) -> impl Iterator<Item = &str> {
-        self.positions.iter().map(|(b, e)| &self.tokens[*b..*e])
+        self.positions.iter().map(|(b, e)| unsafe { self.tokens.get_unchecked(*b..*e) })
     }
 
     fn range(&self) -> (usize, usize) {
@@ -109,7 +108,7 @@ impl<'a> RefTokens<'a> {
 
     fn tokens(&self) -> &str {
         let (b, e) = self.range();
-        &self.tokens[b..e]
+        unsafe { self.tokens.get_unchecked(b..e) }
     }
 
     fn split_at(&self, i: usize) -> (Self, Self) {
@@ -148,7 +147,7 @@ impl<'a> Index<usize> for RefTokens<'a> {
 
     fn index(&self, index: usize) -> &Self::Output {
         let (b, e) = self.positions[index];
-        &self.tokens[b..e]
+        unsafe { self.tokens.get_unchecked(b..e) }
     }
 }
 
@@ -424,7 +423,7 @@ where
 
     pub(crate) fn write_token_to_roaringish_packed(
         &self,
-        token_to_token_id: &AHashMap<Box<str>, u32>,
+        token_to_token_id: &GxHashMap<Box<str>, u32>,
         token_id_to_roaringish_packed: &[RoaringishPacked],
         mmap_size: &mut usize,
         batch_id: u32,
@@ -687,16 +686,16 @@ where
         bump: &'alloc Bump,
     ) -> (
         Option<RefTokenLinkedList<'a, 'alloc>>,
-        AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+        GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
     ) {
         #[inline(always)]
         fn check_before_recursion<'a, 'b, 'alloc, D>(
             me: &DB<D>,
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
-            token_to_packed: &mut AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+            token_to_packed: &mut GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
             mmap: &'b Mmap,
-            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
+            memo_token_to_score_choices: &mut GxHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
             bump: &'alloc Bump,
         ) -> Option<usize>
         where
@@ -735,9 +734,9 @@ where
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
             common_tokens: &HashSet<Box<str>>,
-            token_to_packed: &mut AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+            token_to_packed: &mut GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
             mmap: &'b Mmap,
-            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
+            memo_token_to_score_choices: &mut GxHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
 
             bump: &'alloc Bump,
         ) -> usize
@@ -845,11 +844,11 @@ where
         // TODO: FIX
         // if common_tokens.is_empty() {
         //     let mut choices = Vec::with_capacity(tokens.len());
-        //     let mut token_to_packed = AHashMap::with_capacity(tokens.len());
+        //     let mut token_to_packed = GxHashMap::with_capacity(tokens.len());
         //     for token in tokens.iter() {
         //         match self.get_roaringish_packed(rotxn, token, mmap) {
         //             Some(packed) => token_to_packed.insert(token, packed),
-        //             None => return (Vec::new(), AHashMap::new()),
+        //             None => return (Vec::new(), GxHashMap::new()),
         //         };
         //         choices.push(token);
         //     }
@@ -857,8 +856,8 @@ where
         // }
 
         let len = tokens.reserve_len();
-        let mut memo_token_to_score_choices = AHashMap::with_capacity(len);
-        let mut token_to_packed = AHashMap::with_capacity(len);
+        let mut memo_token_to_score_choices = GxHashMap::with_capacity(len);
+        let mut token_to_packed = GxHashMap::with_capacity(len);
         // let bump = Bump::with_capacity(std::mem::size_of::<RefTokenLinkedList>() * len);
 
         let score = match check_before_recursion(
@@ -894,11 +893,11 @@ where
         // println!("score: {score}");
 
         if score == 0 {
-            return (None, AHashMap::new());
+            return (None, GxHashMap::new());
         }
         match memo_token_to_score_choices.remove(&tokens) {
             Some((_, choices)) => (Some(*choices), token_to_packed),
-            None => (None, AHashMap::new()),
+            None => (None, GxHashMap::new()),
         }
     }
 

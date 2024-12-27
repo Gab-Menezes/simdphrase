@@ -7,7 +7,6 @@
 #![feature(iter_intersperse)]
 #![feature(new_zeroed_alloc)]
 
-use ahash::{AHashSet, RandomState};
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};

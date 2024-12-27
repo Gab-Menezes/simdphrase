@@ -1,6 +1,6 @@
 use std::{cell::Cell, cmp::Reverse, collections::HashSet, path::Path};
 
-use ahash::{AHashMap, AHashSet, HashMapExt, HashSetExt};
+use gxhash::{HashMap as GxHashMap, HashSet as GxHashSet, HashMapExt, HashSetExt};
 use fxhash::{FxHashMap, FxHashSet};
 use heed::RwTxn;
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
@@ -17,7 +17,7 @@ use crate::{
 
 #[derive(Debug)]
 pub enum CommonTokens {
-    // List(AHashSet<Box<str>>),
+    // List(GxHashSet<Box<str>>),
     FixedNum(u32),
     Percentage(f64),
 }
@@ -29,10 +29,10 @@ where
         + Archive,
 {
     batch_id: u32,
-    hllp_tokens: HyperLogLogPlus<Box<str>, ahash::RandomState>,
+    hllp_tokens: HyperLogLogPlus<Box<str>, gxhash::GxBuildHasher>,
 
     next_token_id: u32,
-    token_to_token_id: AHashMap<Box<str>, u32>,
+    token_to_token_id: GxHashMap<Box<str>, u32>,
 
     // this 2 containers are in sync
     token_id_to_roaringish_packed: Vec<RoaringishPacked>,
@@ -53,9 +53,9 @@ where
     fn new() -> Self {
         Self {
             batch_id: 0,
-            hllp_tokens: HyperLogLogPlus::new(18, ahash::RandomState::new()).unwrap(),
+            hllp_tokens: HyperLogLogPlus::new(18, gxhash::GxBuildHasher::default()).unwrap(),
             next_token_id: 0,
-            token_to_token_id: AHashMap::new(),
+            token_to_token_id: GxHashMap::new(),
             token_id_to_roaringish_packed: Vec::new(),
             token_id_to_token: Vec::new(),
             doc_ids: Vec::new(),
@@ -88,8 +88,8 @@ where
 
     fn get_token_id(
         token: &str,
-        hllp_tokens: &mut HyperLogLogPlus<Box<str>, ahash::RandomState>,
-        token_to_token_id: &mut AHashMap<Box<str>, u32>,
+        hllp_tokens: &mut HyperLogLogPlus<Box<str>, gxhash::GxBuildHasher>,
+        token_to_token_id: &mut GxHashMap<Box<str>, u32>,
         token_id_to_token: &mut Vec<Box<str>>,
         token_id_to_roaringish_packed: &mut Vec<RoaringishPacked>,
         next_token_id: &mut u32,
@@ -288,7 +288,7 @@ impl Indexer {
 
     fn generate_common_tokens<'a>(
         &self,
-        token_to_freq: &'a AHashMap<Box<str>, u32>,
+        token_to_freq: &'a GxHashMap<Box<str>, u32>,
     ) -> HashSet<Box<str>> {
         let Some(common_tokens) = &self.common_tokens else {
             return HashSet::new();
@@ -332,7 +332,7 @@ impl Indexer {
         let batch_size = self.batch_size.unwrap_or(u32::MAX);
         let mut it = docs.into_iter();
 
-        let mut token_to_freq = AHashMap::new();
+        let mut token_to_freq = GxHashMap::new();
         let mut next_doc_id = 0;
         let mut mmap_size = 0;
 
