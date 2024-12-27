@@ -2,11 +2,12 @@ use core::range::RangeFrom;
 use std::{
     alloc::Layout, borrow::Borrow, cmp::Reverse, collections::{
         hash_map::{Entry, RawEntryMut},
-        BTreeSet, BinaryHeap, HashMap, HashSet,
-    }, fmt::Debug, fs::File, hash::Hash, io::BufWriter, mem::MaybeUninit, num::NonZero, ops::Index, path::{Path, PathBuf}, slice::SliceIndex, str::FromStr, sync::atomic::{AtomicU64, Ordering::Relaxed}, u32
+        BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList,
+    }, fmt::Debug, fs::File, hash::Hash, io::BufWriter, mem::MaybeUninit, num::NonZero, ops::Index, path::{Path, PathBuf}, rc::Rc, slice::SliceIndex, str::FromStr, sync::atomic::{AtomicU64, Ordering::Relaxed}, u32
 };
 
 use ahash::{AHashMap, AHashSet, HashMapExt};
+use bumpalo::Bump;
 use fxhash::{FxHashMap, FxHashSet};
 use heed::{
     types::Str, Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
@@ -86,6 +87,12 @@ impl<'a> RefTokens<'a> {
         self.len() == 0
     }
 
+    fn reserve_len(&self) -> usize {
+        let n = MAX_WINDOW_LEN.get();
+        let l = self.len();
+        n * (l.max(n) - n + 1) + ((n - 1) * n) / 2
+    }
+
     fn first(&self) -> Option<&str> {
         self.positions.first().map(|(b, e)| &self.tokens[*b..*e])
     }
@@ -144,6 +151,34 @@ impl<'a> Index<usize> for RefTokens<'a> {
         &self.tokens[b..e]
     }
 }
+
+#[derive(Clone, Copy)]
+struct RefTokenLinkedList<'a, 'alloc> {
+    tokens: RefTokens<'a>,
+    next: Option<&'alloc RefTokenLinkedList<'a, 'alloc>>,
+}
+
+impl<'a, 'alloc> RefTokenLinkedList<'a, 'alloc> {
+    fn iter<'b: 'alloc>(&'b self) -> RefTokenLinkedListIter<'a, 'alloc> {
+        RefTokenLinkedListIter(Some(self))
+    }
+}
+
+struct RefTokenLinkedListIter<'a, 'alloc>(Option<&'alloc RefTokenLinkedList<'a, 'alloc>>);
+impl<'a, 'alloc> Iterator for RefTokenLinkedListIter<'a, 'alloc> {
+    type Item = &'alloc RefTokens<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.0 {
+            Some(linked_list) => {
+                self.0 = linked_list.next;
+                Some(&linked_list.tokens)
+            },
+            None => None,
+        }
+    }
+}
+
 
 #[derive(Archive, Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct BorrowStr<'a>(#[rkyv(with = InlineAsBox)] &'a str);
@@ -642,24 +677,27 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn merge_and_minimize_tokens<'a, 'b>(
+    pub(crate) fn merge_and_minimize_tokens<'a, 'b, 'alloc>(
         &self,
         rotxn: &RoTxn,
         tokens: RefTokens<'a>,
         common_tokens: &HashSet<Box<str>>,
         mmap: &'b Mmap,
+
+        bump: &'alloc Bump,
     ) -> (
-        Vec<RefTokens<'a>>,
+        Option<RefTokenLinkedList<'a, 'alloc>>,
         AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
     ) {
         #[inline(always)]
-        fn check_before_recursion<'a, 'b, D>(
+        fn check_before_recursion<'a, 'b, 'alloc, D>(
             me: &DB<D>,
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
             token_to_packed: &mut AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
             mmap: &'b Mmap,
-            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, Vec<RefTokens<'a>>)>,
+            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
+            bump: &'alloc Bump,
         ) -> Option<usize>
         where
             D: for<'c> Serialize<HighSerializer<AlignedVec, ArenaHandle<'c>, rkyv::rancor::Error>>
@@ -676,7 +714,12 @@ where
                     Some(packed) => {
                         let score = packed.len();
                         e.insert(packed);
-                        memo_token_to_score_choices.insert(tokens, (score, vec![tokens]));
+
+                        let linked_list = bump.alloc(RefTokenLinkedList {
+                            tokens,
+                            next: None,
+                        });
+                        memo_token_to_score_choices.insert(tokens, (score, linked_list));
                         score
                     }
                     None => 0,
@@ -694,7 +737,9 @@ where
             common_tokens: &HashSet<Box<str>>,
             token_to_packed: &mut AHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
             mmap: &'b Mmap,
-            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, Vec<RefTokens<'a>>)>, // count: &mut usize,
+            memo_token_to_score_choices: &mut AHashMap<RefTokens<'a>, (usize, &'alloc RefTokenLinkedList<'a, 'alloc>)>,
+
+            bump: &'alloc Bump,
         ) -> usize
         where
             D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
@@ -703,7 +748,8 @@ where
         {
             const { assert!(MAX_WINDOW_LEN.get() == 3) };
             let mut final_score = usize::MAX;
-            let mut choices = Vec::new();
+            let mut best_token_choice = None;
+            let mut best_rem_choice = None;
 
             // TODO: fix this, it looks ugly
             let mut end = tokens
@@ -747,6 +793,7 @@ where
                                 token_to_packed,
                                 mmap,
                                 memo_token_to_score_choices,
+                                bump
                             ) {
                                 Some(score) => score,
                                 None => inner_merge_and_minimize_tokens(
@@ -757,6 +804,7 @@ where
                                     token_to_packed,
                                     mmap,
                                     memo_token_to_score_choices,
+                                    bump
                                 ),
                             }
                         }
@@ -769,13 +817,26 @@ where
                 let calc_score = score + rem_score;
                 if calc_score < final_score {
                     final_score = calc_score;
-                    choices.clear();
-                    choices.push(tokens);
+
+                    best_token_choice = Some(tokens);
                     if let Some((_, rem_choices)) = memo_token_to_score_choices.get(&rem) {
-                        choices.extend(rem_choices.into_iter());
+                        best_rem_choice = Some(*rem_choices);
                     };
                 }
             }
+
+            let choices = match (best_token_choice, best_rem_choice) {
+                (None, None) => return 0,
+                (None, Some(_)) => return 0,
+                (Some(tokens), None) => bump.alloc(RefTokenLinkedList {
+                    tokens,
+                    next: None,
+                }),
+                (Some(tokens), Some(rem)) => bump.alloc(RefTokenLinkedList {
+                    tokens,
+                    next: Some(rem),
+                }),
+            };
 
             memo_token_to_score_choices.insert(tokens, (final_score, choices));
             final_score
@@ -795,11 +856,10 @@ where
         //     return (choices, token_to_packed);
         // }
 
-        let n = MAX_WINDOW_LEN.get();
-        let l = tokens.len();
-        let len = n * (l.max(n) - n + 1) + ((n - 1) * n) / 2;
+        let len = tokens.reserve_len();
         let mut memo_token_to_score_choices = AHashMap::with_capacity(len);
         let mut token_to_packed = AHashMap::with_capacity(len);
+        // let bump = Bump::with_capacity(std::mem::size_of::<RefTokenLinkedList>() * len);
 
         let score = match check_before_recursion(
             self,
@@ -808,6 +868,7 @@ where
             &mut token_to_packed,
             mmap,
             &mut memo_token_to_score_choices,
+            &bump
         ) {
             Some(score) => score,
             None => inner_merge_and_minimize_tokens(
@@ -818,6 +879,7 @@ where
                 &mut token_to_packed,
                 mmap,
                 &mut memo_token_to_score_choices,
+                &bump
             ),
         };
 
@@ -832,11 +894,11 @@ where
         // println!("score: {score}");
 
         if score == 0 {
-            return (Vec::new(), AHashMap::new());
+            return (None, AHashMap::new());
         }
         match memo_token_to_score_choices.remove(&tokens) {
-            Some((_, choices)) => (choices, token_to_packed),
-            None => (Vec::new(), AHashMap::new()),
+            Some((_, choices)) => (Some(*choices), token_to_packed),
+            None => (None, AHashMap::new()),
         }
     }
 
@@ -895,19 +957,20 @@ where
         }
 
         let b = std::time::Instant::now();
+        let bump = Bump::with_capacity(tokens.reserve_len() * 5);
         let (final_tokens, token_to_packed) =
-            self.merge_and_minimize_tokens(&rotxn, tokens, &common_tokens, mmap);
+            self.merge_and_minimize_tokens(&rotxn, tokens, &common_tokens, mmap, &bump);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        if final_tokens.is_empty() {
+        let Some(final_tokens) = final_tokens else {
             return Vec::new();
-        }
+        };
 
-        if final_tokens.len() == 1 {
+        if final_tokens.next.is_none() {
             return token_to_packed
-                .get(final_tokens.first().unwrap())
+                .get(&final_tokens.tokens)
                 .unwrap()
                 .get_doc_ids(stats);
         }

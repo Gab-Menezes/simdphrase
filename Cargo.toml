@@ -17,6 +17,7 @@ rkyv = { version = "0.8.8", features = ["unaligned", "pointer_width_64"] }
 memmap2 = "0.9.5"
 hyperloglogplus = { version = "0.4.1", features = ["const-loop"] }
 dhat = "0.3.3"
+bumpalo = "3.16.0"
 # cmov = "0.3.1"
 
 [dev-dependencies]

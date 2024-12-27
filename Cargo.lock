@@ -778,6 +778,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "arbitrary",
+ "bumpalo",
  "clap",
  "criterion",
  "dhat",
