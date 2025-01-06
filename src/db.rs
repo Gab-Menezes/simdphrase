@@ -220,11 +220,14 @@ pub struct Stats {
     pub first_intersect: AtomicU64,
     pub first_intersect_simd: AtomicU64,
     pub first_intersect_naive: AtomicU64,
+    pub first_intersect_binary: AtomicU64,
 
     pub second_binary_search: AtomicU64,
     pub second_intersect: AtomicU64,
     pub second_intersect_simd: AtomicU64,
     pub second_intersect_naive: AtomicU64,
+    pub second_intersect_binary: AtomicU64,
+
 
     pub first_result: AtomicU64,
     pub second_result: AtomicU64,
@@ -253,10 +256,12 @@ impl Debug for Stats {
         let first_intersect = self.first_intersect.load(Relaxed) as f64;
         let first_intersect_simd = self.first_intersect_simd.load(Relaxed) as f64;
         let first_intersect_naive = self.first_intersect_naive.load(Relaxed) as f64;
+        let first_intersect_binary = self.first_intersect_binary.load(Relaxed) as f64;
         let second_binary_search = self.second_binary_search.load(Relaxed) as f64;
         let second_intersect = self.second_intersect.load(Relaxed) as f64;
         let second_intersect_simd = self.second_intersect_simd.load(Relaxed) as f64;
         let second_intersect_naive = self.second_intersect_naive.load(Relaxed) as f64;
+        let second_intersect_binary = self.second_intersect_binary.load(Relaxed) as f64;
         let first_result = self.first_result.load(Relaxed) as f64;
         let second_result = self.second_result.load(Relaxed) as f64;
         let get_doc_ids = self.get_doc_ids.load(Relaxed) as f64;
@@ -322,6 +327,14 @@ impl Debug for Stats {
                 ),
             )
             .field(
+                "    first_intersect_binary",
+                &format_args!(
+                    "     ({:08.3}ms, {:08.3}us/iter)",
+                    first_intersect_binary / 1000f64,
+                    first_intersect_binary / iters,
+                ),
+            )
+            .field(
                 "second_binary_search",
                 &format_args!(
                     "      ({:08.3}ms, {:08.3}us/iter, {per_second_binary_search:06.3}%)",
@@ -351,6 +364,14 @@ impl Debug for Stats {
                     "    ({:08.3}ms, {:08.3}us/iter)",
                     second_intersect_naive / 1000f64,
                     second_intersect_naive / iters,
+                ),
+            )
+            .field(
+                "    second_intersect_binary",
+                &format_args!(
+                    "     ({:08.3}ms, {:08.3}us/iter)",
+                    second_intersect_binary / 1000f64,
+                    second_intersect_binary / iters,
                 ),
             )
             .field(
@@ -1039,7 +1060,7 @@ where
         let mut borrow_lhs = BorrowRoaringishPacked::new(&lhs);
         let mut lhs_len = rhs_len;
 
-        for t in it {
+        for (i, t) in it.enumerate() {
             let rhs = token_to_packed.get(t).unwrap();
             lhs = borrow_lhs.intersect::<I>(*rhs, lhs_len, stats);
             borrow_lhs = BorrowRoaringishPacked::new(&lhs);

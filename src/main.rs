@@ -15,26 +15,14 @@ use heed::{DatabaseFlags, EnvFlags, EnvOpenOptions};
 use hyperloglogplus::HyperLogLog;
 use memmap2::Mmap;
 use phrase_search::{
-    naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, Aligned64,
-    BorrowRoaringishPacked, CommonTokens, Indexer, RoaringishPacked, Searcher, Stats, DB,
+    binary_search::BinarySearchIntersect, naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, Aligned64, BorrowRoaringishPacked, CommonTokens, Indexer, RoaringishPacked, Searcher, Stats, DB
 };
 use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 use std::{
-    alloc::{alloc, dealloc, Allocator},
-    collections::HashSet,
-    fmt::Debug,
-    fs::{read_to_string, File},
-    hash::Hash,
-    io::{BufRead, BufReader},
-    mem::replace,
-    path::PathBuf,
-    ptr::NonNull,
-    simd::Simd,
-    str::FromStr,
-    time::Duration,
+    alloc::{alloc, dealloc, Allocator}, cmp::Ordering, collections::HashSet, fmt::Debug, fs::{read_to_string, File}, hash::Hash, io::{BufRead, BufReader}, mem::replace, path::PathBuf, ptr::NonNull, simd::Simd, str::FromStr, time::Duration
 };
 
 #[derive(Parser, Debug)]
@@ -93,7 +81,7 @@ where
         + Archive
         + 'static,
 {
-    type Intersect = SimdIntersect;
+    type Intersect = BinarySearchIntersect;
 
     let searcher = Searcher::<D>::new(&args.index_name, args.db_size).unwrap();
 

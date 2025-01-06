@@ -32,6 +32,7 @@ pub use indexer::Indexer;
 pub use indexer::CommonTokens;
 
 pub use roaringish::intersect::naive;
+pub use roaringish::intersect::binary_search;
 
 // #[cfg(all(
 //     target_feature = "avx512f",

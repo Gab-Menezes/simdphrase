@@ -272,4 +272,8 @@ impl Intersect for SimdIntersect {
     ) -> usize {
         lhs.0.len().min(rhs.0.len()) + 1 + N
     }
+
+    fn needs_second_pass() -> bool {
+        true
+    }
 }

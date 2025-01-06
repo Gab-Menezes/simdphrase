@@ -8,6 +8,7 @@ use super::{Aligned, BorrowRoaringishPacked};
 
 pub mod naive;
 pub mod simd;
+pub mod binary_search;
 
 mod private {
     pub trait IntersectSeal {}
@@ -95,4 +96,6 @@ pub trait Intersect: private::IntersectSeal {
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> usize;
+
+    fn needs_second_pass() -> bool;
 }

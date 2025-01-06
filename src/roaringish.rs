@@ -329,6 +329,10 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
+        if !I::needs_second_pass() {
+            return RoaringishPacked(packed);
+        }
+
         let mut msb_packed = BorrowRoaringishPacked::new(&msb_packed);
 
         let b = std::time::Instant::now();
