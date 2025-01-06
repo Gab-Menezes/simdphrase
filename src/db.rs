@@ -88,7 +88,7 @@ impl Tokens {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct RefTokens<'a> {
     tokens: &'a str,
     positions: &'a [(usize, usize)],
@@ -172,7 +172,7 @@ impl<'a> Index<usize> for RefTokens<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct RefTokenLinkedList<'a, 'alloc> {
     tokens: RefTokens<'a>,
     next: Option<&'alloc RefTokenLinkedList<'a, 'alloc>>,
@@ -725,7 +725,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn merge_and_minimize_tokens<'a, 'b, 'alloc>(
+    fn merge_and_minimize_tokens<'a, 'b, 'alloc>(
         &self,
         rotxn: &RoTxn,
         tokens: RefTokens<'a>,
