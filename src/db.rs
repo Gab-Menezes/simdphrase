@@ -1060,7 +1060,7 @@ where
         let mut borrow_lhs = BorrowRoaringishPacked::new(&lhs);
         let mut lhs_len = rhs_len;
 
-        for (i, t) in it.enumerate() {
+        for t in it {
             let rhs = token_to_packed.get(t).unwrap();
             lhs = borrow_lhs.intersect::<I>(*rhs, lhs_len, stats);
             borrow_lhs = BorrowRoaringishPacked::new(&lhs);
