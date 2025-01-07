@@ -54,21 +54,23 @@ macro_rules! check_msb {
 
         $choose_doc_id_group:ident
     ) => {
-        if $values & $check_mask == 0 {
-            continue;
-        }
-    
-        let Some(packed) = $other.get($k) else {
-            continue;
-        };
-    
-        let packed_doc_id_group = clear_values(*packed);
-        let packed_values = unpack_values(*packed);
-        if $doc_id_group_expr != packed_doc_id_group {
-            continue;
-        }
+        'a: {
+            if $values & $check_mask == 0 {
+                break 'a;
+            }
         
-        check_intersection($packed_result, $i, $choose_doc_id_group($doc_id_group, packed_doc_id_group), $intersection($values, $lhs_len as u32, $and_mask, packed_values));
+            let Some(packed) = $other.get($k) else {
+                break 'a;
+            };
+        
+            let packed_doc_id_group = clear_values(*packed);
+            let packed_values = unpack_values(*packed);
+            if $doc_id_group_expr != packed_doc_id_group {
+                break 'a;
+            }
+            
+            check_intersection($packed_result, $i, $choose_doc_id_group($doc_id_group, packed_doc_id_group), $intersection($values, $lhs_len as u32, $and_mask, packed_values));
+        }
     };
 }
 
@@ -147,26 +149,6 @@ impl Intersect for BinarySearchIntersect {
                                         intersection,
                                     );
                                 }
-
-                                check_msb!(
-                                    packed_result,
-                                    i,
-
-                                    lhs_doc_id_group,
-                                    lhs_doc_id_group + ADD_ONE_GROUP,
-                                    lhs_values,
-
-                                    lhs_len,
-                                    msb_mask,
-                                    lsb_mask,
-                                    lhs_intersection,
-
-                                    rhs,
-
-                                    k + 1,
-
-                                    lhs_choose_doc_id_group
-                                );
                             }
                             None => {
                                 check_intersection(
@@ -175,28 +157,28 @@ impl Intersect for BinarySearchIntersect {
                                     lhs_doc_id_group,
                                     intersection,
                                 );
-
-                                check_msb!(
-                                    packed_result,
-                                    i,
-
-                                    lhs_doc_id_group,
-                                    lhs_doc_id_group + ADD_ONE_GROUP,
-                                    lhs_values,
-
-                                    lhs_len,
-                                    msb_mask,
-                                    lsb_mask,
-                                    lhs_intersection,
-
-                                    rhs,
-
-                                    k + 1,
-
-                                    lhs_choose_doc_id_group
-                                );
                             }
                         }
+
+                        check_msb!(
+                            packed_result,
+                            i,
+
+                            lhs_doc_id_group,
+                            lhs_doc_id_group + ADD_ONE_GROUP,
+                            lhs_values,
+
+                            lhs_len,
+                            msb_mask,
+                            lsb_mask,
+                            lhs_intersection,
+
+                            rhs,
+
+                            k + 1,
+
+                            lhs_choose_doc_id_group
+                        );
                         k
                     }
                     Err(k) => {
@@ -229,17 +211,34 @@ impl Intersect for BinarySearchIntersect {
             for rhs_packed in rhs.0.into_iter().copied() {
                 let rhs_doc_id_group = clear_values(rhs_packed);
                 let rhs_values = unpack_values(rhs_packed);
-                if rhs_packed >> 32 == 1469962 {
-                    println!("rhs: {rhs_packed}: {:032b} {:016b} {rhs_values:016b}", rhs_packed >> 32, (rhs_packed & 0xFFFF0000) >> 16);
-                }
                 let k = match lhs
                     .binary_search_by_key(&rhs_doc_id_group, |lhs_packed| clear_values(*lhs_packed))
                 {
                     Ok(k) => {
+                        check_msb!(
+                            packed_result,
+                            i,
+
+                            rhs_doc_id_group,
+                            rhs_doc_id_group - ADD_ONE_GROUP,
+                            rhs_values,
+
+                            lhs_len,
+                            lsb_mask,
+                            lsb_mask,
+                            rhs_intersection,
+
+                            lhs,
+
+                            k.saturating_sub(1),
+
+                            rhs_choose_doc_id_group
+                        );
+
                         let lhs_packed = unsafe { *lhs.get_unchecked(k) };
                         let lhs_values = unpack_values(lhs_packed);
-                        println!("lhs: {lhs_packed}: {:032b} {:016b} {lhs_values:016b}", lhs_packed >> 32, (lhs_packed & 0xFFFF0000) >> 16);
                         let intersection = (lhs_values << lhs_len) & rhs_values;
+
                         let packed_result_init = unsafe {
                             MaybeUninit::slice_assume_init_mut(
                                 packed_result.get_unchecked_mut(..*i),
@@ -260,26 +259,6 @@ impl Intersect for BinarySearchIntersect {
                                         intersection,
                                     );
                                 }
-
-                                check_msb!(
-                                    packed_result,
-                                    i,
-        
-                                    rhs_doc_id_group,
-                                    rhs_doc_id_group - ADD_ONE_GROUP,
-                                    rhs_values,
-        
-                                    lhs_len,
-                                    lsb_mask,
-                                    lsb_mask,
-                                    rhs_intersection,
-        
-                                    lhs,
-        
-                                    k.saturating_sub(1),
-        
-                                    rhs_choose_doc_id_group
-                                );
                             }
                             None => {
                                 check_intersection(
@@ -287,26 +266,6 @@ impl Intersect for BinarySearchIntersect {
                                     i,
                                     rhs_doc_id_group,
                                     intersection,
-                                );
-
-                                check_msb!(
-                                    packed_result,
-                                    i,
-        
-                                    rhs_doc_id_group,
-                                    rhs_doc_id_group - ADD_ONE_GROUP,
-                                    rhs_values,
-        
-                                    lhs_len,
-                                    lsb_mask,
-                                    lsb_mask,
-                                    rhs_intersection,
-        
-                                    lhs,
-        
-                                    k.saturating_sub(1),
-        
-                                    rhs_choose_doc_id_group
                                 );
                             }
                         }
