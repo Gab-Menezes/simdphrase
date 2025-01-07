@@ -1,7 +1,7 @@
 use std::{cmp::Reverse, collections::HashSet, path::Path};
 
 use fxhash::FxHashMap;
-use gxhash::{HashMap as GxHashMap, HashMapExt, HashSetExt};
+use gxhash::{HashMap as GxHashMap, HashMapExt};
 use heed::RwTxn;
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 use rkyv::{

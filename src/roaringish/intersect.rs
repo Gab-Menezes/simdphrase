@@ -71,6 +71,7 @@ pub trait Intersect: private::IntersectSeal {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn inner_intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,

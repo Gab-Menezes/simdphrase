@@ -8,12 +8,8 @@ use std::{
     marker::PhantomData,
     mem::MaybeUninit,
     num::NonZero,
-    ops::{Add, Deref},
-    simd::{
-        cmp::SimdPartialEq,
-        num::{SimdInt, SimdUint},
-        LaneCount, Simd, SupportedLaneCount,
-    },
+    ops::Deref,
+    simd::{cmp::SimdPartialEq, num::SimdUint, LaneCount, Simd, SupportedLaneCount},
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -243,6 +239,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         Self(packed, PhantomData)
     }
 
+    #[allow(clippy::ptr_arg)]
     pub fn new(packed: &'a Vec<u64, Aligned64>) -> Self {
         Self(packed, PhantomData)
     }
@@ -273,23 +270,27 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             let first_lhs = clear_values(*first_lhs);
             let first_rhs = clear_values(*first_rhs);
 
-            if first_lhs < first_rhs {
-                let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
-                    // in the case where we are moving the lhs and both values are
-                    // equal we need to go back one to ensure that the check of msb
-                    // can't skip the previous value
-                    Ok(i) => i.saturating_sub(1),
-                    Err(i) => i,
-                };
-                let aligned_i = i / 8 * 8;
-                *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[aligned_i..]);
-            } else if first_lhs > first_rhs {
-                let i = match rhs.0.binary_search_by_key(&first_lhs, |p| clear_values(*p)) {
-                    Ok(i) => i,
-                    Err(i) => i,
-                };
-                let aligned_i = i / 8 * 8;
-                *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[aligned_i..]);
+            match first_lhs.cmp(&first_rhs) {
+                std::cmp::Ordering::Less => {
+                    let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
+                        // in the case where we are moving the lhs and both values are
+                        // equal we need to go back one to ensure that the check of msb
+                        // can't skip the previous value
+                        Ok(i) => i.saturating_sub(1),
+                        Err(i) => i,
+                    };
+                    let aligned_i = i / 8 * 8;
+                    *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[aligned_i..]);
+                }
+                std::cmp::Ordering::Greater => {
+                    let i = match rhs.0.binary_search_by_key(&first_lhs, |p| clear_values(*p)) {
+                        Ok(i) => i,
+                        Err(i) => i,
+                    };
+                    let aligned_i = i / 8 * 8;
+                    *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[aligned_i..]);
+                }
+                std::cmp::Ordering::Equal => {}
             }
 
             // skip the ending of the slice
@@ -645,9 +646,7 @@ impl Display for RoaringishPacked {
             let group = unpack_group(*packed) as u32;
             let values = unpack_values(*packed);
             let s = group * 16;
-            (0..16u32)
-                .filter_map(move |i| ((values >> i) & 1 == 1).then_some(i))
-                .map(move |i| (doc_id, s + i))
+            (0..16u32).filter_map(move |i| ((values >> i) & 1 == 1).then_some((doc_id, s + i)))
         });
         f.debug_list().entries(it).finish()
     }
@@ -660,9 +659,7 @@ impl<A> Display for BorrowRoaringishPacked<'_, A> {
             let group = unpack_group(*packed) as u32;
             let values = unpack_values(*packed);
             let s = group * 16;
-            (0..16u32)
-                .filter_map(move |i| ((values >> i) & 1 == 1).then_some(i))
-                .map(move |i| (doc_id, s + i))
+            (0..16u32).filter_map(move |i| ((values >> i) & 1 == 1).then_some((doc_id, s + i)))
         });
         f.debug_list().entries(it).finish()
     }

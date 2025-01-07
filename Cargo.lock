@@ -783,7 +783,6 @@ dependencies = [
  "hyperloglogplus",
  "memmap2",
  "rand",
- "rayon",
  "rkyv",
  "unicode-segmentation",
 ]

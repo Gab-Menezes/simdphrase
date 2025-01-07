@@ -43,42 +43,44 @@ impl Intersect for NaiveIntersect {
             let rhs_doc_id_group = clear_values(rhs_packed);
             let rhs_values = unpack_values(rhs_packed);
 
-            if lhs_doc_id_group == rhs_doc_id_group {
-                unsafe {
-                    if FIRST {
-                        let intersection = (lhs_values << lhs_len) & rhs_values;
-                        packed_result
-                            .get_unchecked_mut(*i)
-                            .write(lhs_doc_id_group | intersection as u64);
-
-                        msb_packed_result
-                            .get_unchecked_mut(*j)
-                            .write(lhs_packed + ADD_ONE_GROUP);
-
-                        *j += (lhs_values & msb_mask > 0) as usize;
-                    } else {
-                        let intersection =
-                            lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
-                        packed_result
-                            .get_unchecked_mut(*i)
-                            .write(lhs_doc_id_group | intersection as u64);
-                    }
-                }
-                *i += 1;
-                *lhs_i += 1;
-                *rhs_i += 1;
-            } else if lhs_doc_id_group > rhs_doc_id_group {
-                *rhs_i += 1;
-            } else {
-                if FIRST {
+            match lhs_doc_id_group.cmp(&rhs_doc_id_group) {
+                std::cmp::Ordering::Equal => {
                     unsafe {
-                        msb_packed_result
-                            .get_unchecked_mut(*j)
-                            .write(lhs_packed + ADD_ONE_GROUP);
-                        *j += (lhs_values & msb_mask > 0) as usize;
+                        if FIRST {
+                            let intersection = (lhs_values << lhs_len) & rhs_values;
+                            packed_result
+                                .get_unchecked_mut(*i)
+                                .write(lhs_doc_id_group | intersection as u64);
+
+                            msb_packed_result
+                                .get_unchecked_mut(*j)
+                                .write(lhs_packed + ADD_ONE_GROUP);
+
+                            *j += (lhs_values & msb_mask > 0) as usize;
+                        } else {
+                            let intersection =
+                                lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
+                            packed_result
+                                .get_unchecked_mut(*i)
+                                .write(lhs_doc_id_group | intersection as u64);
+                        }
                     }
+                    *i += 1;
+                    *lhs_i += 1;
+                    *rhs_i += 1;
                 }
-                *lhs_i += 1;
+                std::cmp::Ordering::Greater => *rhs_i += 1,
+                std::cmp::Ordering::Less => {
+                    if FIRST {
+                        unsafe {
+                            msb_packed_result
+                                .get_unchecked_mut(*j)
+                                .write(lhs_packed + ADD_ONE_GROUP);
+                            *j += (lhs_values & msb_mask > 0) as usize;
+                        }
+                    }
+                    *lhs_i += 1;
+                }
             }
         }
 

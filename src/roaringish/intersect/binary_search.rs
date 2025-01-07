@@ -93,14 +93,14 @@ impl Intersect for BinarySearchIntersect {
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
 
-        lhs_i: &mut usize,
-        rhs_i: &mut usize,
+        _lhs_i: &mut usize,
+        _rhs_i: &mut usize,
 
         packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         i: &mut usize,
 
-        msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
-        j: &mut usize,
+        _msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        _j: &mut usize,
 
         lhs_len: u16,
         msb_mask: u16,

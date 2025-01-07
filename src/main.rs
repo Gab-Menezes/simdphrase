@@ -12,7 +12,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use core::str;
 use phrase_search::{simd::SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
-use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
@@ -73,10 +72,12 @@ struct Search {
     data_set: DataSet,
 }
 
-fn search<D: Send + Sync>(args: Search)
+fn search<D>(args: Search)
 where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive
+        + Send
+        + Sync
         + 'static,
 {
     type Intersect = SimdIntersect;

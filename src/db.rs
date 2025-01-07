@@ -8,7 +8,7 @@ use memmap2::{Mmap, MmapMut};
 use rkyv::{
     api::high::HighSerializer,
     deserialize,
-    ser::{allocator::ArenaHandle, writer::IoWriter, Writer},
+    ser::{allocator::ArenaHandle, writer::IoWriter},
     util::AlignedVec,
     with::InlineAsBox,
     Archive, Archived, Serialize,
@@ -23,9 +23,7 @@ use std::{
     num::NonZero,
     ops::Index,
     path::Path,
-    slice::SliceIndex,
     sync::atomic::{AtomicU64, Ordering::Relaxed},
-    u32,
 };
 
 use crate::{
@@ -580,10 +578,7 @@ where
         impl Eq for ToMerge<'_> {}
         impl PartialOrd for ToMerge<'_> {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                match self.token.0.partial_cmp(&other.token.0) {
-                    Some(std::cmp::Ordering::Equal) => self.i.partial_cmp(&other.i),
-                    ord => ord,
-                }
+                Some(self.cmp(other))
             }
         }
         impl Ord for ToMerge<'_> {
@@ -781,6 +776,7 @@ where
 
         // TODO: improve this, temporary code just to make sure things working
         // maybe use smallvec ?
+        #[allow(clippy::too_many_arguments)]
         fn inner_merge_and_minimize_tokens<'a, 'b, 'c, 'alloc, D>(
             me: &DB<D>,
             rotxn: &RoTxn,

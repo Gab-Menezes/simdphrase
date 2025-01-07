@@ -4,7 +4,6 @@ use std::{
 };
 
 use memmap2::Mmap;
-use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
@@ -47,16 +46,4 @@ where
         self.db
             .search::<I>(q, stats, &self.common_tokens, &self.mmap)
     }
-
-    // pub fn foo(&self, q: &str)
-    // where
-    //     D: Display
-    // {
-    //     self.shards
-    //         .iter()
-    //         .for_each(|shard| {
-    //             println!("New shard");
-    //             shard.get_documents_by_ids(shard.search(q))
-    //         });
-    // }
 }
