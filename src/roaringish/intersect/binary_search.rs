@@ -7,42 +7,69 @@ use crate::{
 
 use super::{private::IntersectSeal, Intersect};
 
-#[inline(always)]
-fn check_msb(
-    packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
-    i: &mut usize,
 
-    doc_id_group: u64,
-    values: u16,
-    change_doc_id_group: impl FnOnce(u64, u64) -> u64,
+fn lhs_intersection(
+    lhs_values: u16, 
+    lhs_len: u32,
+    lsb_mask: u16,
+    rhs_values: u16
+) -> u16 {
+    lhs_values.rotate_left(lhs_len) & lsb_mask & rhs_values
+}
 
-    lhs_len: u16,
-    check_mask: u16,
-    and_mask: u16,
-    rotate: impl FnOnce(u16, u32) -> u16,
+fn lhs_choose_doc_id_group(_lhs_doc_id_group: u64, packed_doc_id_group: u64) -> u64 {
+    packed_doc_id_group
+}
 
-    other: &[u64],
+fn rhs_intersection(
+    rhs_values: u16, 
+    lhs_len: u32,
+    lsb_mask: u16,
+    lhs_values: u16
+) -> u16 {
+    lhs_values.rotate_left(lhs_len) & lsb_mask & rhs_values
+}
 
-    k: usize,
-    f: impl FnOnce(usize) -> usize,
-) {
-    if values & check_mask == 0 {
-        return;
-    }
+fn rhs_choose_doc_id_group(rhs_doc_id_group: u64, _packed_doc_id_group: u64) -> u64 {
+    rhs_doc_id_group
+}
 
-    let Some(packed) = other.get(f(k)) else {
-        return;
+macro_rules! check_msb {
+    (
+        $packed_result:ident,
+        $i:ident,
+
+        $doc_id_group:ident,
+        $doc_id_group_expr:expr,
+        $values:ident,
+        
+        $lhs_len:ident,
+        $check_mask:ident,
+        $and_mask:ident,
+        $intersection:ident,
+
+        $other:ident,
+
+        $k:expr,
+
+        $choose_doc_id_group:ident
+    ) => {
+        if $values & $check_mask == 0 {
+            continue;
+        }
+    
+        let Some(packed) = $other.get($k) else {
+            continue;
+        };
+    
+        let packed_doc_id_group = clear_values(*packed);
+        let packed_values = unpack_values(*packed);
+        if $doc_id_group_expr != packed_doc_id_group {
+            continue;
+        }
+        
+        check_intersection($packed_result, $i, $choose_doc_id_group($doc_id_group, packed_doc_id_group), $intersection($values, $lhs_len as u32, $and_mask, packed_values));
     };
-
-    let packed_doc_id_group = clear_values(*packed);
-    let packed_values = unpack_values(*packed);
-    if change_doc_id_group(doc_id_group, ADD_ONE_GROUP) != packed_doc_id_group {
-        return;
-    }
-
-    let intersection = rotate(values, lhs_len as u32) & and_mask & packed_values;
-
-    check_intersection(packed_result, i, doc_id_group.max(packed_doc_id_group), intersection);
 }
 
 #[inline(always)]
@@ -121,19 +148,24 @@ impl Intersect for BinarySearchIntersect {
                                     );
                                 }
 
-                                check_msb(
+                                check_msb!(
                                     packed_result,
                                     i,
+
                                     lhs_doc_id_group,
+                                    lhs_doc_id_group + ADD_ONE_GROUP,
                                     lhs_values,
-                                    |a, b| a + b,
+
                                     lhs_len,
                                     msb_mask,
                                     lsb_mask,
-                                    |values, lhs_len| values.rotate_left(lhs_len),
+                                    lhs_intersection,
+
                                     rhs,
-                                    k,
-                                    |k| k + 1,
+
+                                    k + 1,
+
+                                    lhs_choose_doc_id_group
                                 );
                             }
                             None => {
@@ -144,38 +176,48 @@ impl Intersect for BinarySearchIntersect {
                                     intersection,
                                 );
 
-                                check_msb(
+                                check_msb!(
                                     packed_result,
                                     i,
+
                                     lhs_doc_id_group,
+                                    lhs_doc_id_group + ADD_ONE_GROUP,
                                     lhs_values,
-                                    |a, b| a + b,
+
                                     lhs_len,
                                     msb_mask,
                                     lsb_mask,
-                                    |values, lhs_len| values.rotate_left(lhs_len),
+                                    lhs_intersection,
+
                                     rhs,
-                                    k,
-                                    |k| k + 1,
+
+                                    k + 1,
+
+                                    lhs_choose_doc_id_group
                                 );
                             }
                         }
                         k
                     }
                     Err(k) => {
-                        check_msb(
+                        check_msb!(
                             packed_result,
                             i,
+
                             lhs_doc_id_group,
+                            lhs_doc_id_group + ADD_ONE_GROUP,
                             lhs_values,
-                            |a, b| a + b,
+
                             lhs_len,
                             msb_mask,
                             lsb_mask,
-                            |values, lhs_len| values.rotate_left(lhs_len),
+                            lhs_intersection,
+
                             rhs,
+
                             k,
-                            |k| k,
+
+                            lhs_choose_doc_id_group
                         );
                         k
                     }
@@ -187,6 +229,10 @@ impl Intersect for BinarySearchIntersect {
             for rhs_packed in rhs.0.into_iter().copied() {
                 let rhs_doc_id_group = clear_values(rhs_packed);
                 let rhs_values = unpack_values(rhs_packed);
+                // if rhs_packed >> 32 == 77224 {
+                //     println!("here");
+                //     println!("{rhs_packed}: {:032b} {:016b} {rhs_values:016b}", rhs_packed >> 32, (rhs_packed << 32) >> 48)
+                // }
                 let k = match lhs
                     .binary_search_by_key(&rhs_doc_id_group, |lhs_packed| clear_values(*lhs_packed))
                 {
@@ -215,19 +261,24 @@ impl Intersect for BinarySearchIntersect {
                                     );
                                 }
 
-                                check_msb(
+                                check_msb!(
                                     packed_result,
                                     i,
+        
                                     rhs_doc_id_group,
+                                    rhs_doc_id_group - ADD_ONE_GROUP,
                                     rhs_values,
-                                    |a, b| a - b,
+        
                                     lhs_len,
                                     lsb_mask,
-                                    msb_mask,
-                                    |values, lhs_len| values.rotate_right(lhs_len),
+                                    lsb_mask,
+                                    rhs_intersection,
+        
                                     lhs,
-                                    k,
-                                    |k| k + 1,
+        
+                                    k + 1,
+        
+                                    rhs_choose_doc_id_group
                                 );
                             }
                             None => {
@@ -238,19 +289,24 @@ impl Intersect for BinarySearchIntersect {
                                     intersection,
                                 );
 
-                                check_msb(
+                                check_msb!(
                                     packed_result,
                                     i,
+        
                                     rhs_doc_id_group,
+                                    rhs_doc_id_group - ADD_ONE_GROUP,
                                     rhs_values,
-                                    |a, b| a - b,
+        
                                     lhs_len,
                                     lsb_mask,
-                                    msb_mask,
-                                    |values, lhs_len| values.rotate_right(lhs_len),
+                                    lsb_mask,
+                                    rhs_intersection,
+        
                                     lhs,
-                                    k,
-                                    |k| k + 1,
+        
+                                    k + 1,
+        
+                                    rhs_choose_doc_id_group
                                 );
                             }
                         }
@@ -258,19 +314,24 @@ impl Intersect for BinarySearchIntersect {
                         k
                     }
                     Err(k) => {
-                        check_msb(
+                        check_msb!(
                             packed_result,
                             i,
+
                             rhs_doc_id_group,
+                            rhs_doc_id_group - ADD_ONE_GROUP,
                             rhs_values,
-                            |a, b| a - b,
+
                             lhs_len,
                             lsb_mask,
-                            msb_mask,
-                            |values, lhs_len| values.rotate_right(lhs_len),
+                            lsb_mask,
+                            rhs_intersection,
+
                             lhs,
-                            k,
-                            |k| k.saturating_sub(1),
+
+                            k.saturating_sub(1),
+
+                            rhs_choose_doc_id_group
                         );
                         k
                     }
