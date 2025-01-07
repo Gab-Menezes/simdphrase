@@ -327,7 +327,7 @@ impl Debug for Stats {
                 ),
             )
             .field(
-                "    first_intersect_binary",
+                "  first_intersect_binary",
                 &format_args!(
                     "     ({:08.3}ms, {:08.3}us/iter)",
                     first_intersect_binary / 1000f64,
@@ -367,7 +367,7 @@ impl Debug for Stats {
                 ),
             )
             .field(
-                "    second_intersect_binary",
+                "  second_intersect_binary",
                 &format_args!(
                     "     ({:08.3}ms, {:08.3}us/iter)",
                     second_intersect_binary / 1000f64,
