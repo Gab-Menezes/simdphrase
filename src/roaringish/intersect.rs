@@ -6,9 +6,9 @@ use crate::{allocator::Aligned64, Stats};
 
 use super::{Aligned, BorrowRoaringishPacked};
 
+pub mod binary_search;
 pub mod naive;
 pub mod simd;
-pub mod binary_search;
 
 mod private {
     pub trait IntersectSeal {}
@@ -54,8 +54,7 @@ pub trait Intersect: private::IntersectSeal {
             lhs_len,
             msb_mask,
             lsb_mask,
-
-            stats
+            stats,
         );
 
         let (packed_result_ptr, a0) = Box::into_raw_with_allocator(packed_result);

@@ -1,36 +1,24 @@
 pub mod intersect;
 
-use arbitrary::{unstructured::ArbitraryIter, Arbitrary, Unstructured};
-use rkyv::{
-    with::{Inline, InlineAsBox, Skip},
-    Archive, Serialize,
-};
+use arbitrary::{Arbitrary, Unstructured};
+use rkyv::{with::InlineAsBox, Archive, Serialize};
 use std::{
-    arch::x86_64::{
-        __m256i, __m512i, _mm256_mask_compressstoreu_epi16, _mm256_mask_compressstoreu_epi32,
-        _mm512_mask_compressstoreu_epi32, _mm512_mask_compressstoreu_epi64,
-    },
+    arch::x86_64::_mm256_mask_compressstoreu_epi32,
     fmt::{Binary, Debug, Display},
-    intrinsics::assume,
-    iter::Take,
     marker::PhantomData,
     mem::MaybeUninit,
     num::NonZero,
     ops::{Add, Deref},
     simd::{
-        cmp::{SimdPartialEq, SimdPartialOrd},
+        cmp::SimdPartialEq,
         num::{SimdInt, SimdUint},
-        simd_swizzle, LaneCount, Simd, SimdElement, SupportedLaneCount,
+        LaneCount, Simd, SupportedLaneCount,
     },
     sync::atomic::Ordering::Relaxed,
-    time::Instant,
 };
 
 use crate::Stats;
-use crate::{
-    allocator::{Aligned64, AlignedAllocator},
-    binary_search::BinarySearchIntersect,
-};
+use crate::{allocator::Aligned64, binary_search::BinarySearchIntersect};
 
 use self::intersect::Intersect;
 
@@ -245,7 +233,7 @@ impl<A> Deref for BorrowRoaringishPacked<'_, A> {
     type Target = [u64];
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
@@ -454,7 +442,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     }
 }
 
-impl<'a, A> BorrowRoaringishPacked<'a, A> {
+impl<A> BorrowRoaringishPacked<'_, A> {
     #[cfg(not(target_feature = "avx512f"))]
     #[inline(always)]
     pub fn get_doc_ids(&self, stats: &Stats) -> Vec<u32> {
@@ -538,7 +526,7 @@ impl<'a, A> BorrowRoaringishPacked<'a, A> {
         }
 
         let j = r
-            .into_iter()
+            .iter()
             .take_while(|packed| unpack_doc_id(**packed) == last_doc_id)
             .count();
         let r = &r[j..];
@@ -551,7 +539,7 @@ impl<'a, A> BorrowRoaringishPacked<'a, A> {
             }
         }
 
-        if r.len() >= 1 {
+        if !r.is_empty() {
             unsafe {
                 doc_ids
                     .get_unchecked_mut(i)
@@ -584,7 +572,7 @@ impl Binary for RoaringishPacked {
     }
 }
 
-impl<'a, A> Binary for BorrowRoaringishPacked<'a, A> {
+impl<A> Binary for BorrowRoaringishPacked<'_, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut list = f.debug_list();
         for packed in self.0.iter() {
@@ -665,7 +653,7 @@ impl Display for RoaringishPacked {
     }
 }
 
-impl<'a, A> Display for BorrowRoaringishPacked<'a, A> {
+impl<A> Display for BorrowRoaringishPacked<'_, A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let it = self.0.iter().flat_map(|packed| {
             let doc_id = unpack_doc_id(*packed);
@@ -690,8 +678,8 @@ impl<'a> Arbitrary<'a> for RoaringishPacked {
         let mut packed = Vec::with_capacity_in(len, Aligned64::default());
         for v in it {
             let (doc_id, group, value) = v?;
-            let pack = (doc_id as u64) << 32
-                | ((group.get() ^ u16::MAX) as u64) << 16
+            let pack = ((doc_id as u64) << 32)
+                | (((group.get() ^ u16::MAX) as u64) << 16)
                 | value.get() as u64;
             packed.push(pack);
         }

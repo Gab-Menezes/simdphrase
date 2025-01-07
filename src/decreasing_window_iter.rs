@@ -17,7 +17,7 @@ impl<'a, T> Iterator for DecreasingWindows<'a, T> {
     fn next(&mut self) -> Option<&'a [T]> {
         if self.size.get() > self.v.len() {
             self.size = NonZero::new(self.v.len())?;
-        } 
+        }
 
         let ret = Some(&self.v[..self.size.get()]);
         self.v = &self.v[1..];

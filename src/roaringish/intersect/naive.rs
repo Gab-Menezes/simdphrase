@@ -2,7 +2,8 @@ use std::{mem::MaybeUninit, sync::atomic::Ordering::Relaxed};
 
 use crate::{
     allocator::Aligned64,
-    roaringish::{clear_values, unpack_values, Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP}, Stats,
+    roaringish::{clear_values, unpack_values, Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP},
+    Stats,
 };
 
 use super::{private::IntersectSeal, Intersect};
@@ -32,7 +33,7 @@ impl Intersect for NaiveIntersect {
         stats: &Stats,
     ) {
         let b = std::time::Instant::now();
-        
+
         while *lhs_i < lhs.0.len() && *rhs_i < rhs.0.len() {
             let lhs_packed = unsafe { *lhs.0.get_unchecked(*lhs_i) };
             let lhs_doc_id_group = clear_values(lhs_packed);
@@ -83,12 +84,12 @@ impl Intersect for NaiveIntersect {
 
         if FIRST {
             stats
-            .first_intersect_naive
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+                .first_intersect_naive
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         } else {
             stats
-            .second_intersect_naive
-            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+                .second_intersect_naive
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
         }
     }
 

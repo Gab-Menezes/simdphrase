@@ -4,7 +4,7 @@ use std::{
 };
 
 use memmap2::Mmap;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
@@ -36,11 +36,16 @@ where
         paths.sort_unstable();
 
         let (db, common_tokens, mmap) = DB::open(path, db_size);
-        Some(Self { db, common_tokens, mmap })
+        Some(Self {
+            db,
+            common_tokens,
+            mmap,
+        })
     }
 
     pub fn search<I: Intersect>(&self, q: &str, stats: &Stats) -> Vec<u32> {
-        self.db.search::<I>(q, stats, &self.common_tokens, &self.mmap)
+        self.db
+            .search::<I>(q, stats, &self.common_tokens, &self.mmap)
     }
 
     // pub fn foo(&self, q: &str)

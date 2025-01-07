@@ -1,11 +1,17 @@
-use std::{alloc::{alloc, dealloc, Allocator}, ptr::NonNull};
+use std::{
+    alloc::{alloc, dealloc, Allocator},
+    ptr::NonNull,
+};
 
 use rkyv::{Archive, Serialize};
 
 #[derive(Default, Archive, Serialize)]
 pub struct AlignedAllocator<const N: usize>;
 unsafe impl<const N: usize> Allocator for AlignedAllocator<N> {
-    fn allocate(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {
+    fn allocate(
+        &self,
+        layout: std::alloc::Layout,
+    ) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {
         unsafe {
             let p = alloc(layout.align_to(N).unwrap());
             let s = std::ptr::slice_from_raw_parts_mut(p, layout.size());

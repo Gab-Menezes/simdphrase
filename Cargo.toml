@@ -23,14 +23,6 @@ gxhash = "3.4.1"
 criterion = "0.5.1"
 rand = "0.8.5"
 
-[[bench]]
-name = "roaringish"
-harness = false
-
-[[bench]]
-name = "add"
-harness = false
-
 [profile.dev]
 rustflags = [
     "-C", "target-cpu=native", 

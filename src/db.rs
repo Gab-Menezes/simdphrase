@@ -1,6 +1,4 @@
 use bumpalo::Bump;
-use core::range::RangeFrom;
-use fxhash::{FxHashMap, FxHashSet};
 use gxhash::{HashMap as GxHashMap, HashMapExt};
 use heed::{
     types::Str, Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
@@ -9,43 +7,29 @@ use heed::{
 use memmap2::{Mmap, MmapMut};
 use rkyv::{
     api::high::HighSerializer,
-    boxed::{ArchivedBox, BoxResolver},
     deserialize,
-    rancor::Fallible,
-    ser::{allocator::ArenaHandle, writer::IoWriter, Allocator, Serializer, Writer},
-    tuple::{ArchivedTuple2, ArchivedTuple3},
+    ser::{allocator::ArenaHandle, writer::IoWriter, Writer},
     util::AlignedVec,
-    vec::{ArchivedVec, VecResolver},
-    with::{Inline, InlineAsBox},
-    Archive, Archived, Deserialize, Place, Serialize,
+    with::InlineAsBox,
+    Archive, Archived, Serialize,
 };
 use std::{
-    alloc::Layout,
-    borrow::Borrow,
     cmp::Reverse,
-    collections::{
-        hash_map::{Entry, RawEntryMut},
-        BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList,
-    },
+    collections::{hash_map::Entry, BinaryHeap, HashSet},
     fmt::Debug,
     fs::File,
     hash::Hash,
     io::BufWriter,
-    iter,
-    mem::MaybeUninit,
     num::NonZero,
     ops::Index,
-    path::{Path, PathBuf},
-    rc::Rc,
+    path::Path,
     slice::SliceIndex,
-    str::FromStr,
     sync::atomic::{AtomicU64, Ordering::Relaxed},
     u32,
 };
 
 use crate::{
     codecs::{NativeU32, ZeroCopyCodec},
-    decreasing_window_iter::DecreasingWindows,
     normalize,
     roaringish::{
         intersect::Intersect, Aligned, ArchivedBorrowRoaringishPacked, RoaringishPackedKind,
@@ -94,7 +78,7 @@ struct RefTokens<'a> {
     positions: &'a [(usize, usize)],
 }
 
-impl<'a> RefTokens<'a> {
+impl RefTokens<'_> {
     fn len(&self) -> usize {
         self.positions.len()
     }
@@ -147,7 +131,7 @@ impl<'a> RefTokens<'a> {
     }
 }
 
-impl<'a> PartialEq for RefTokens<'a> {
+impl PartialEq for RefTokens<'_> {
     fn eq(&self, other: &Self) -> bool {
         let t0 = self.tokens();
         let t1 = other.tokens();
@@ -155,15 +139,15 @@ impl<'a> PartialEq for RefTokens<'a> {
     }
 }
 
-impl<'a> Eq for RefTokens<'a> {}
+impl Eq for RefTokens<'_> {}
 
-impl<'a> Hash for RefTokens<'a> {
+impl Hash for RefTokens<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.tokens().hash(state);
     }
 }
 
-impl<'a> Index<usize> for RefTokens<'a> {
+impl Index<usize> for RefTokens<'_> {
     type Output = str;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -203,11 +187,11 @@ impl<'a, 'alloc> Iterator for RefTokenLinkedListIter<'a, 'alloc> {
 struct BorrowStr<'a>(#[rkyv(with = InlineAsBox)] &'a str);
 
 mod db_constants {
-    pub const DB_DOC_ID_TO_DOCUMENT: &'static str = "doc_id_to_document";
-    pub const DB_TOKEN_TO_OFFSETS: &'static str = "token_to_offsets";
-    pub const KEY_COMMON_TOKENS: &'static str = "common_tokens";
-    pub const FILE_ROARINGISH_PACKED: &'static str = "roaringish_packed";
-    pub const TEMP_FILE_TOKEN_TO_PACKED: &'static str = "temp_token_to_packed";
+    pub const DB_DOC_ID_TO_DOCUMENT: &str = "doc_id_to_document";
+    pub const DB_TOKEN_TO_OFFSETS: &str = "token_to_offsets";
+    pub const KEY_COMMON_TOKENS: &str = "common_tokens";
+    pub const FILE_ROARINGISH_PACKED: &str = "roaringish_packed";
+    pub const TEMP_FILE_TOKEN_TO_PACKED: &str = "temp_token_to_packed";
 }
 
 pub const MAX_WINDOW_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
@@ -227,7 +211,6 @@ pub struct Stats {
     pub second_intersect_simd: AtomicU64,
     pub second_intersect_naive: AtomicU64,
     pub second_intersect_binary: AtomicU64,
-
 
     pub first_result: AtomicU64,
     pub second_result: AtomicU64,
@@ -499,7 +482,7 @@ where
         batch_id: u32,
     ) {
         let mut token_to_packed: Vec<_> = token_to_token_id
-            .into_iter()
+            .iter()
             .map(|(token, token_id)| {
                 let packed = &token_id_to_roaringish_packed[*token_id as usize];
                 *mmap_size += packed.size_bytes();
@@ -589,13 +572,13 @@ where
             packed: &'a ArchivedBorrowRoaringishPacked<'a, Unaligned>,
             i: usize,
         }
-        impl<'a> PartialEq for ToMerge<'a> {
+        impl PartialEq for ToMerge<'_> {
             fn eq(&self, other: &Self) -> bool {
                 self.token.0 == other.token.0 && self.i == other.i
             }
         }
-        impl<'a> Eq for ToMerge<'a> {}
-        impl<'a> PartialOrd for ToMerge<'a> {
+        impl Eq for ToMerge<'_> {}
+        impl PartialOrd for ToMerge<'_> {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 match self.token.0.partial_cmp(&other.token.0) {
                     Some(std::cmp::Ordering::Equal) => self.i.partial_cmp(&other.i),
@@ -603,7 +586,7 @@ where
                 }
             }
         }
-        impl<'a> Ord for ToMerge<'a> {
+        impl Ord for ToMerge<'_> {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 match self.token.0.cmp(&other.token.0) {
                     std::cmp::Ordering::Equal => self.i.cmp(&other.i),
@@ -614,19 +597,18 @@ where
 
         let mut heap = BinaryHeap::new();
         for (i, it) in iters.iter_mut().enumerate() {
-            match it.next() {
-                Some(token_to_packed) => heap.push(Reverse(ToMerge {
+            if let Some(token_to_packed) = it.next() {
+                heap.push(Reverse(ToMerge {
                     token: &token_to_packed.0,
                     packed: &token_to_packed.1,
                     i,
-                })),
-                None => {}
+                }))
             }
         }
 
         while let Some(token_to_packed) = heap.pop() {
             let to_merge = token_to_packed.0;
-            if let Some(token_to_packed) = (&mut iters[to_merge.i]).next() {
+            if let Some(token_to_packed) = iters[to_merge.i].next() {
                 heap.push(Reverse(ToMerge {
                     token: &token_to_packed.0,
                     packed: &token_to_packed.1,
@@ -645,7 +627,7 @@ where
                 }
 
                 let next_to_merge = heap.pop().unwrap().0;
-                if let Some(token_to_packed) = (&mut iters[next_to_merge.i]).next() {
+                if let Some(token_to_packed) = iters[next_to_merge.i].next() {
                     heap.push(Reverse(ToMerge {
                         token: &token_to_packed.0,
                         packed: &token_to_packed.1,
@@ -937,7 +919,7 @@ where
             &mut token_to_packed,
             mmap,
             &mut memo_token_to_score_choices,
-            &bump,
+            bump,
         ) {
             Some(score) => score,
             None => inner_merge_and_minimize_tokens(
@@ -948,7 +930,7 @@ where
                 &mut token_to_packed,
                 mmap,
                 &mut memo_token_to_score_choices,
-                &bump,
+                bump,
             ),
         };
 
@@ -1030,7 +1012,7 @@ where
         let b = std::time::Instant::now();
         let bump = Bump::with_capacity(tokens.reserve_len() * 5);
         let (final_tokens, token_to_packed) =
-            self.merge_and_minimize_tokens(&rotxn, tokens, &common_tokens, mmap, &bump);
+            self.merge_and_minimize_tokens(&rotxn, tokens, common_tokens, mmap, &bump);
         stats
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);

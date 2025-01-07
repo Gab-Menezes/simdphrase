@@ -11,18 +11,16 @@
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use core::str;
-use heed::{DatabaseFlags, EnvFlags, EnvOpenOptions};
-use hyperloglogplus::HyperLogLog;
-use memmap2::Mmap;
-use phrase_search::{
-    binary_search::BinarySearchIntersect, naive::NaiveIntersect, normalize, simd::SimdIntersect, tokenize, Aligned64, BorrowRoaringishPacked, CommonTokens, Indexer, RoaringishPacked, Searcher, Stats, DB
-};
+use phrase_search::{simd::SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
 use rayon::iter::ParallelIterator;
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
 use std::{
-    alloc::{alloc, dealloc, Allocator}, cmp::Ordering, collections::HashSet, fmt::Debug, fs::{read_to_string, File}, hash::Hash, io::{BufRead, BufReader}, mem::replace, path::PathBuf, ptr::NonNull, simd::Simd, str::FromStr, time::Duration
+    fmt::Debug,
+    fs::File,
+    io::{BufRead, BufReader},
+    path::PathBuf,
 };
 
 #[derive(Parser, Debug)]

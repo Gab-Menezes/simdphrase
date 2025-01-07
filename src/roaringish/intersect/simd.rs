@@ -5,10 +5,10 @@ use std::{
     simd::{cmp::SimdPartialOrd, Simd},
 };
 use std::{
-    arch::{asm, x86_64::{
-        _mm512_load_epi64, _mm512_maskz_compress_epi64, _mm512_store_epi64, _mm512_storeu_epi64, _mm_load_si128, _mm_loadu_epi16, _mm_mask_compressstoreu_epi16, _mm_maskz_compress_epi16, _mm_storeu_epi16
-    }},
-    simd::num::SimdUint,
+    arch::{
+        asm,
+        x86_64::{_mm512_load_epi64, _mm512_maskz_compress_epi64, _mm512_storeu_epi64},
+    },
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -92,10 +92,7 @@ unsafe fn analyze_msb(
     unsafe {
         // TODO: avoid compressstore on zen
         let compress = _mm512_maskz_compress_epi64(mask, pack_plus_one.into());
-        _mm512_storeu_epi64(
-            msb_packed_result.as_mut_ptr().add(*j) as *mut _,
-            compress
-        );
+        _mm512_storeu_epi64(msb_packed_result.as_mut_ptr().add(*j) as *mut _, compress);
     }
     *j += mask.count_ones() as usize;
 }
@@ -196,8 +193,8 @@ impl Intersect for SimdIntersect {
                 unsafe {
                     let lhs_pack_compress: Simd<u64, N> =
                         _mm512_maskz_compress_epi64(lhs_mask, lhs_pack).into();
-                    let doc_id_group_compress = clear_values_simd(lhs_pack_compress.into());
-                    let lhs_values_compress = unpack_values_simd(lhs_pack_compress.into());
+                    let doc_id_group_compress = clear_values_simd(lhs_pack_compress);
+                    let lhs_values_compress = unpack_values_simd(lhs_pack_compress);
 
                     let rhs_values_compress: Simd<u64, N> =
                         _mm512_maskz_compress_epi64(rhs_mask, rhs_values.into()).into();

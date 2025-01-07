@@ -7,13 +7,7 @@ use crate::{
 
 use super::{private::IntersectSeal, Intersect};
 
-
-fn lhs_intersection(
-    lhs_values: u16, 
-    lhs_len: u32,
-    lsb_mask: u16,
-    rhs_values: u16
-) -> u16 {
+fn lhs_intersection(lhs_values: u16, lhs_len: u32, lsb_mask: u16, rhs_values: u16) -> u16 {
     lhs_values.rotate_left(lhs_len) & lsb_mask & rhs_values
 }
 
@@ -21,12 +15,7 @@ fn lhs_choose_doc_id_group(_lhs_doc_id_group: u64, packed_doc_id_group: u64) -> 
     packed_doc_id_group
 }
 
-fn rhs_intersection(
-    rhs_values: u16, 
-    lhs_len: u32,
-    lsb_mask: u16,
-    lhs_values: u16
-) -> u16 {
+fn rhs_intersection(rhs_values: u16, lhs_len: u32, lsb_mask: u16, lhs_values: u16) -> u16 {
     lhs_values.rotate_left(lhs_len) & lsb_mask & rhs_values
 }
 
@@ -42,7 +31,7 @@ macro_rules! check_msb {
         $doc_id_group:ident,
         $doc_id_group_expr:expr,
         $values:ident,
-        
+
         $lhs_len:ident,
         $check_mask:ident,
         $and_mask:ident,
@@ -58,18 +47,23 @@ macro_rules! check_msb {
             if $values & $check_mask == 0 {
                 break 'a;
             }
-        
+
             let Some(packed) = $other.get($k) else {
                 break 'a;
             };
-        
+
             let packed_doc_id_group = clear_values(*packed);
             let packed_values = unpack_values(*packed);
             if $doc_id_group_expr != packed_doc_id_group {
                 break 'a;
             }
-            
-            check_intersection($packed_result, $i, $choose_doc_id_group($doc_id_group, packed_doc_id_group), $intersection($values, $lhs_len as u32, $and_mask, packed_values));
+
+            check_intersection(
+                $packed_result,
+                $i,
+                $choose_doc_id_group($doc_id_group, packed_doc_id_group),
+                $intersection($values, $lhs_len as u32, $and_mask, packed_values),
+            );
         }
     };
 }
@@ -118,7 +112,7 @@ impl Intersect for BinarySearchIntersect {
 
         if lhs.len() <= rhs.len() {
             let mut rhs = rhs.0;
-            for lhs_packed in lhs.0.into_iter().copied() {
+            for lhs_packed in lhs.0.iter().copied() {
                 let lhs_doc_id_group = clear_values(lhs_packed);
                 let lhs_values = unpack_values(lhs_packed);
                 let k = match rhs
@@ -163,20 +157,15 @@ impl Intersect for BinarySearchIntersect {
                         check_msb!(
                             packed_result,
                             i,
-
                             lhs_doc_id_group,
                             lhs_doc_id_group + ADD_ONE_GROUP,
                             lhs_values,
-
                             lhs_len,
                             msb_mask,
                             lsb_mask,
                             lhs_intersection,
-
                             rhs,
-
                             k + 1,
-
                             lhs_choose_doc_id_group
                         );
                         k
@@ -185,20 +174,15 @@ impl Intersect for BinarySearchIntersect {
                         check_msb!(
                             packed_result,
                             i,
-
                             lhs_doc_id_group,
                             lhs_doc_id_group + ADD_ONE_GROUP,
                             lhs_values,
-
                             lhs_len,
                             msb_mask,
                             lsb_mask,
                             lhs_intersection,
-
                             rhs,
-
                             k,
-
                             lhs_choose_doc_id_group
                         );
                         k
@@ -208,7 +192,7 @@ impl Intersect for BinarySearchIntersect {
             }
         } else {
             let mut lhs = lhs.0;
-            for rhs_packed in rhs.0.into_iter().copied() {
+            for rhs_packed in rhs.0.iter().copied() {
                 let rhs_doc_id_group = clear_values(rhs_packed);
                 let rhs_values = unpack_values(rhs_packed);
                 let k = match lhs
@@ -218,20 +202,15 @@ impl Intersect for BinarySearchIntersect {
                         check_msb!(
                             packed_result,
                             i,
-
                             rhs_doc_id_group,
                             rhs_doc_id_group - ADD_ONE_GROUP,
                             rhs_values,
-
                             lhs_len,
                             lsb_mask,
                             lsb_mask,
                             rhs_intersection,
-
                             lhs,
-
                             k.saturating_sub(1),
-
                             rhs_choose_doc_id_group
                         );
 
@@ -276,20 +255,15 @@ impl Intersect for BinarySearchIntersect {
                         check_msb!(
                             packed_result,
                             i,
-
                             rhs_doc_id_group,
                             rhs_doc_id_group - ADD_ONE_GROUP,
                             rhs_values,
-
                             lhs_len,
                             lsb_mask,
                             lsb_mask,
                             rhs_intersection,
-
                             lhs,
-
                             k.saturating_sub(1),
-
                             rhs_choose_doc_id_group
                         );
                         k

@@ -18,21 +18,21 @@
 #![feature(maybe_uninit_slice)]
 #![feature(new_range_api)]
 
+mod allocator;
 mod codecs;
 mod db;
+mod decreasing_window_iter;
 mod indexer;
 mod roaringish;
 mod searcher;
 mod utils;
-mod allocator;
-mod decreasing_window_iter;
 
 pub use db::{Stats, DB};
-pub use indexer::Indexer;
 pub use indexer::CommonTokens;
+pub use indexer::Indexer;
 
-pub use roaringish::intersect::naive;
 pub use roaringish::intersect::binary_search;
+pub use roaringish::intersect::naive;
 
 // #[cfg(all(
 //     target_feature = "avx512f",
@@ -43,9 +43,9 @@ pub use roaringish::intersect::binary_search;
 // ))]
 pub use roaringish::intersect::simd;
 
+pub use allocator::Aligned64;
 pub use roaringish::intersect::Intersect;
-pub use roaringish::RoaringishPacked;
 pub use roaringish::BorrowRoaringishPacked;
+pub use roaringish::RoaringishPacked;
 pub use searcher::Searcher;
 pub use utils::{normalize, tokenize};
-pub use allocator::Aligned64;

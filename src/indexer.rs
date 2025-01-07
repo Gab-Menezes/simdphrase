@@ -1,7 +1,7 @@
-use std::{cell::Cell, cmp::Reverse, collections::HashSet, path::Path};
+use std::{cmp::Reverse, collections::HashSet, path::Path};
 
-use gxhash::{HashMap as GxHashMap, HashSet as GxHashSet, HashMapExt, HashSetExt};
-use fxhash::{FxHashMap, FxHashSet};
+use fxhash::FxHashMap;
+use gxhash::{HashMap as GxHashMap, HashMapExt, HashSetExt};
 use heed::RwTxn;
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 use rkyv::{
@@ -12,7 +12,8 @@ use crate::{
     db::{DB, MAX_WINDOW_LEN},
     decreasing_window_iter::DecreasingWindows,
     roaringish::MAX_VALUE,
-    utils::{normalize, tokenize}, RoaringishPacked,
+    utils::{normalize, tokenize},
+    RoaringishPacked,
 };
 
 #[derive(Debug)]
@@ -124,7 +125,7 @@ where
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
             let token_id = Self::get_token_id(
-                &token,
+                token,
                 &mut self.hllp_tokens,
                 &mut self.token_to_token_id,
                 &mut self.token_id_to_token,
@@ -282,13 +283,13 @@ impl Indexer {
     pub fn new(batch_size: Option<u32>, common_tokens: Option<CommonTokens>) -> Self {
         Self {
             batch_size,
-            common_tokens
+            common_tokens,
         }
     }
 
-    fn generate_common_tokens<'a>(
+    fn generate_common_tokens(
         &self,
-        token_to_freq: &'a GxHashMap<Box<str>, u32>,
+        token_to_freq: &GxHashMap<Box<str>, u32>,
     ) -> HashSet<Box<str>> {
         let Some(common_tokens) = &self.common_tokens else {
             return HashSet::new();
@@ -297,7 +298,7 @@ impl Indexer {
             // CommonTokens::List(tokens) => tokens,
             CommonTokens::FixedNum(max) => {
                 let max = (*max as usize).min(token_to_freq.len());
-                let mut token_to_freq: Vec<_> = token_to_freq.into_iter().collect();
+                let mut token_to_freq: Vec<_> = token_to_freq.iter().collect();
                 token_to_freq.sort_unstable_by_key(|(_, freq)| Reverse(*freq));
                 token_to_freq[0..max]
                     .iter()
@@ -306,7 +307,7 @@ impl Indexer {
             }
             CommonTokens::Percentage(p) => {
                 let max = (token_to_freq.len() as f64 * *p) as usize;
-                let mut token_to_freq: Vec<_> = token_to_freq.into_iter().collect();
+                let mut token_to_freq: Vec<_> = token_to_freq.iter().collect();
                 token_to_freq.sort_unstable_by_key(|(_, freq)| Reverse(*freq));
                 token_to_freq[0..max]
                     .iter()
@@ -324,7 +325,7 @@ impl Indexer {
             + Archive
             + 'static,
     {
-        let db = DB::truncate(&path, db_size);
+        let db = DB::truncate(path, db_size);
         let mut rwtxn = db.env.write_txn().unwrap();
 
         let mut batch = Batch::new();
@@ -337,7 +338,7 @@ impl Indexer {
         let mut mmap_size = 0;
 
         let mut b = std::time::Instant::now();
-        while let Some((content, doc)) = it.next() {
+        for (content, doc) in it.by_ref() {
             let doc_id = next_doc_id;
             next_doc_id += 1;
 
