@@ -229,16 +229,16 @@ impl Intersect for BinarySearchIntersect {
             for rhs_packed in rhs.0.into_iter().copied() {
                 let rhs_doc_id_group = clear_values(rhs_packed);
                 let rhs_values = unpack_values(rhs_packed);
-                // if rhs_packed >> 32 == 77224 {
-                //     println!("here");
-                //     println!("{rhs_packed}: {:032b} {:016b} {rhs_values:016b}", rhs_packed >> 32, (rhs_packed << 32) >> 48)
-                // }
+                if rhs_packed >> 32 == 1469962 {
+                    println!("rhs: {rhs_packed}: {:032b} {:016b} {rhs_values:016b}", rhs_packed >> 32, (rhs_packed & 0xFFFF0000) >> 16);
+                }
                 let k = match lhs
                     .binary_search_by_key(&rhs_doc_id_group, |lhs_packed| clear_values(*lhs_packed))
                 {
                     Ok(k) => {
                         let lhs_packed = unsafe { *lhs.get_unchecked(k) };
                         let lhs_values = unpack_values(lhs_packed);
+                        println!("lhs: {lhs_packed}: {:032b} {:016b} {lhs_values:016b}", lhs_packed >> 32, (lhs_packed & 0xFFFF0000) >> 16);
                         let intersection = (lhs_values << lhs_len) & rhs_values;
                         let packed_result_init = unsafe {
                             MaybeUninit::slice_assume_init_mut(
@@ -276,7 +276,7 @@ impl Intersect for BinarySearchIntersect {
         
                                     lhs,
         
-                                    k + 1,
+                                    k.saturating_sub(1),
         
                                     rhs_choose_doc_id_group
                                 );
@@ -304,7 +304,7 @@ impl Intersect for BinarySearchIntersect {
         
                                     lhs,
         
-                                    k + 1,
+                                    k.saturating_sub(1),
         
                                     rhs_choose_doc_id_group
                                 );
