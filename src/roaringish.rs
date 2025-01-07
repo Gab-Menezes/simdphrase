@@ -7,7 +7,8 @@ use rkyv::{
 };
 use std::{
     arch::x86_64::{
-        __m256i, __m512i, _mm256_mask_compressstoreu_epi16, _mm256_mask_compressstoreu_epi32, _mm512_mask_compressstoreu_epi32, _mm512_mask_compressstoreu_epi64
+        __m256i, __m512i, _mm256_mask_compressstoreu_epi16, _mm256_mask_compressstoreu_epi32,
+        _mm512_mask_compressstoreu_epi32, _mm512_mask_compressstoreu_epi64,
     },
     fmt::{Binary, Debug, Display},
     intrinsics::assume,
@@ -17,13 +18,19 @@ use std::{
     num::NonZero,
     ops::{Add, Deref},
     simd::{
-        cmp::{SimdPartialEq, SimdPartialOrd}, num::{SimdInt, SimdUint}, simd_swizzle, LaneCount, Simd, SimdElement, SupportedLaneCount
+        cmp::{SimdPartialEq, SimdPartialOrd},
+        num::{SimdInt, SimdUint},
+        simd_swizzle, LaneCount, Simd, SimdElement, SupportedLaneCount,
     },
     sync::atomic::Ordering::Relaxed,
+    time::Instant,
 };
 
-use crate::allocator::{Aligned64, AlignedAllocator};
 use crate::Stats;
+use crate::{
+    allocator::{Aligned64, AlignedAllocator},
+    binary_search::BinarySearchIntersect,
+};
 
 use self::intersect::Intersect;
 
@@ -67,9 +74,9 @@ const fn clear_values(packed: u64) -> u64 {
 }
 
 #[inline(always)]
-fn clear_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N> 
+fn clear_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N>
 where
-    LaneCount<N>: SupportedLaneCount
+    LaneCount<N>: SupportedLaneCount,
 {
     packed & Simd::splat(!0xFFFF)
 }
@@ -80,9 +87,9 @@ const fn unpack_doc_id(packed: u64) -> u32 {
 
 #[allow(unused)]
 #[inline(always)]
-fn unpack_doc_id_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u32, N> 
+fn unpack_doc_id_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u32, N>
 where
-    LaneCount<N>: SupportedLaneCount
+    LaneCount<N>: SupportedLaneCount,
 {
     (packed >> Simd::splat(32)).cast()
 }
@@ -96,9 +103,9 @@ const fn unpack_values(packed: u64) -> u16 {
 }
 
 #[inline(always)]
-fn unpack_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N> 
+fn unpack_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N>
 where
-    LaneCount<N>: SupportedLaneCount
+    LaneCount<N>: SupportedLaneCount,
 {
     packed & Simd::splat(0xFFFF)
 }
@@ -259,8 +266,13 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         lhs_len: u16,
         stats: &Stats,
     ) -> RoaringishPacked {
+        const BINARY_SEARCH_INTERSECT: usize = 650;
+
         #[inline(always)]
-        fn binary_search(lhs: &mut BorrowRoaringishPacked<'_, Aligned>, rhs: &mut BorrowRoaringishPacked<'_, Aligned>) {
+        fn binary_search(
+            lhs: &mut BorrowRoaringishPacked<'_, Aligned>,
+            rhs: &mut BorrowRoaringishPacked<'_, Aligned>,
+        ) {
             // skip the begining of the slice
             let Some(first_lhs) = lhs.0.first() else {
                 return;
@@ -272,7 +284,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
 
             let first_lhs = clear_values(*first_lhs);
             let first_rhs = clear_values(*first_rhs);
-    
+
             if first_lhs < first_rhs {
                 let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
                     // in the case where we are moving the lhs and both values are
@@ -324,6 +336,15 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
+        let proportion = lhs.len().max(rhs.len()) / lhs.len().min(rhs.len());
+        if proportion >= BINARY_SEARCH_INTERSECT {
+            let (packed, _) = BinarySearchIntersect::intersect::<true>(lhs, rhs, lhs_len, stats);
+            stats
+                .first_intersect
+                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+
+            return RoaringishPacked(packed);
+        }
         let (packed, msb_packed) = I::intersect::<true>(lhs, rhs, lhs_len, stats);
         stats
             .first_intersect
@@ -489,11 +510,7 @@ impl<'a, A> BorrowRoaringishPacked<'a, A> {
         let mut doc_ids: Box<[MaybeUninit<u32>]> = Box::new_uninit_slice(self.0.len());
         let mut i = 0;
 
-        unsafe {
-            doc_ids
-                .get_unchecked_mut(i)
-                .write(unpack_doc_id(self.0[0]))
-        };
+        unsafe { doc_ids.get_unchecked_mut(i).write(unpack_doc_id(self.0[0])) };
         i += 1;
 
         let mut last_doc_id = unpack_doc_id(self.0[0]);
@@ -507,7 +524,7 @@ impl<'a, A> BorrowRoaringishPacked<'a, A> {
 
             let include_first = (first != last_doc_id) as u8;
             let mask = (doc_id.simd_ne(rot).to_bitmask() as u8 & !1) | include_first;
-            
+
             unsafe {
                 // TODO: avoid compressstore on zen4
                 _mm256_mask_compressstoreu_epi32(
@@ -520,7 +537,10 @@ impl<'a, A> BorrowRoaringishPacked<'a, A> {
             last_doc_id = last;
         }
 
-        let j = r.into_iter().take_while(|packed| unpack_doc_id(**packed) == last_doc_id).count();
+        let j = r
+            .into_iter()
+            .take_while(|packed| unpack_doc_id(**packed) == last_doc_id)
+            .count();
         let r = &r[j..];
         for [packed0, packed1] in r.array_windows::<2>() {
             let doc_id0 = unpack_doc_id(*packed0);

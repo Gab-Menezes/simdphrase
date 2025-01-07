@@ -81,7 +81,7 @@ where
         + Archive
         + 'static,
 {
-    type Intersect = BinarySearchIntersect;
+    type Intersect = SimdIntersect;
 
     let searcher = Searcher::<D>::new(&args.index_name, args.db_size).unwrap();
 
