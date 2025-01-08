@@ -56,6 +56,9 @@ const fn pack(packed_doc_id: u64, group: u16, value: u16) -> u64 {
 const fn clear_values(packed: u64) -> u64 {
     packed & !0xFFFF
 }
+const fn clear_group_values(packed: u64) -> u64 {
+    packed & !0xFFFFFFFF
+}
 
 #[inline(always)]
 fn clear_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N>
@@ -248,7 +251,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     pub fn intersect<I: Intersect>(
         self,
         mut rhs: Self,
-        lhs_len: u16,
+        lhs_len: u32,
         stats: &Stats,
     ) -> RoaringishPacked {
         const BINARY_SEARCH_INTERSECT: usize = 650;
@@ -267,16 +270,13 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
                 return;
             };
 
-            let first_lhs = clear_values(*first_lhs);
-            let first_rhs = clear_values(*first_rhs);
+            let first_lhs = clear_group_values(*first_lhs);
+            let first_rhs = clear_group_values(*first_rhs);
 
             match first_lhs.cmp(&first_rhs) {
                 std::cmp::Ordering::Less => {
                     let i = match lhs.0.binary_search_by_key(&first_rhs, |p| clear_values(*p)) {
-                        // in the case where we are moving the lhs and both values are
-                        // equal we need to go back one to ensure that the check of msb
-                        // can't skip the previous value
-                        Ok(i) => i.saturating_sub(1),
+                        Ok(i) => i,
                         Err(i) => i,
                     };
                     let aligned_i = i / 8 * 8;

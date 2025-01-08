@@ -127,6 +127,7 @@ impl Intersect for SimdIntersect {
         msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         j: &mut usize,
 
+        add_to_group: u64,
         lhs_len: u16,
         msb_mask: u16,
         lsb_mask: u16,
@@ -137,6 +138,7 @@ impl Intersect for SimdIntersect {
 
         let simd_msb_mask = Simd::splat(msb_mask as u64);
         let simd_lsb_mask = Simd::splat(lsb_mask as u64);
+        let simd_add_to_group = Simd::splat(add_to_group);
 
         let end_lhs = lhs.0.len() / N * N;
         let end_rhs = rhs.0.len() / N * N;
@@ -158,8 +160,14 @@ impl Intersect for SimdIntersect {
         // parent function alignment, so this value will change in the future, but
         // assuming that fuctions will be 64 byte aligned, it's fairly easy to find
         // the new value once the code of the parent function changes
-        if !FIRST {
-            for _ in 0..32 {
+        if FIRST {
+            for _ in 0..26 {
+                unsafe {
+                    asm!("nop");
+                }
+            }
+        } else {
+            for _ in 0..48 {
                 unsafe {
                     asm!("nop");
                 }
@@ -172,19 +180,27 @@ impl Intersect for SimdIntersect {
             // where it try to create SIMD code, but it fucks perf
             //
             // Me and my homies hate LLVM
-            let lhs_last = unsafe { clear_values(*lhs_packed.get_unchecked(*lhs_i + N - 1)) };
+            let lhs_last = unsafe { clear_values(*lhs_packed.get_unchecked(*lhs_i + N - 1)) + if FIRST { add_to_group } else { 0 } };
             let rhs_last = unsafe { clear_values(*rhs_packed.get_unchecked(*rhs_i + N - 1)) };
 
-            let (lhs_pack, rhs_pack) = unsafe {
+            let (lhs_pack, rhs_pack): (Simd<u64, N>, Simd<u64, N>) = unsafe {
                 let lhs_pack = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _);
                 let rhs_pack = _mm512_load_epi64(rhs_packed.as_ptr().add(*rhs_i) as *const _);
-                (lhs_pack, rhs_pack)
+                (
+                    lhs_pack.into(), 
+                    rhs_pack.into()
+                )
+            };
+            let lhs_pack = if FIRST {
+                lhs_pack + simd_add_to_group
+            } else {
+                lhs_pack
             };
 
-            let lhs_doc_id_group = clear_values_simd(lhs_pack.into());
+            let lhs_doc_id_group = clear_values_simd(lhs_pack);
 
-            let rhs_doc_id_group = clear_values_simd(rhs_pack.into());
-            let rhs_values = unpack_values_simd(rhs_pack.into());
+            let rhs_doc_id_group = clear_values_simd(rhs_pack);
+            let rhs_values = unpack_values_simd(rhs_pack);
 
             let (lhs_mask, rhs_mask) =
                 unsafe { vp2intersectq(lhs_doc_id_group.into(), rhs_doc_id_group.into()) };
@@ -192,7 +208,7 @@ impl Intersect for SimdIntersect {
             if FIRST || lhs_mask > 0 {
                 unsafe {
                     let lhs_pack_compress: Simd<u64, N> =
-                        _mm512_maskz_compress_epi64(lhs_mask, lhs_pack).into();
+                        _mm512_maskz_compress_epi64(lhs_mask, lhs_pack.into()).into();
                     let doc_id_group_compress = clear_values_simd(lhs_pack_compress);
                     let lhs_values_compress = unpack_values_simd(lhs_pack_compress);
 
@@ -232,8 +248,8 @@ impl Intersect for SimdIntersect {
 
         if FIRST && need_to_analyze_msb && !(*lhs_i < lhs.0.len() && *rhs_i < rhs.0.len()) {
             unsafe {
-                let lhs_pack = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _);
-                analyze_msb(lhs_pack.into(), msb_packed_result, j, simd_msb_mask);
+                let lhs_pack: Simd<u64, N> = _mm512_load_epi64(lhs_packed.as_ptr().add(*lhs_i) as *const _).into();
+                analyze_msb(lhs_pack + simd_add_to_group, msb_packed_result, j, simd_msb_mask);
             };
         }
 
@@ -256,6 +272,7 @@ impl Intersect for SimdIntersect {
             i,
             msb_packed_result,
             j,
+            add_to_group,
             lhs_len,
             msb_mask,
             lsb_mask,

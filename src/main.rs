@@ -11,7 +11,7 @@
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use core::str;
-use phrase_search::{simd::SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
+use phrase_search::{binary_search::BinarySearchIntersect, naive::NaiveIntersect, simd::SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
