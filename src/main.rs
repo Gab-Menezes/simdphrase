@@ -12,7 +12,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use core::str;
 use phrase_search::{
-    binary_search::BinarySearchIntersect, naive::NaiveIntersect, simd::SimdIntersect, CommonTokens,
+    simd::SimdIntersect, CommonTokens,
     Indexer, Searcher, Stats,
 };
 use rkyv::{

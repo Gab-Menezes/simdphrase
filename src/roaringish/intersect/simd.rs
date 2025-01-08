@@ -235,7 +235,7 @@ impl Intersect for SimdIntersect {
             if FIRST {
                 if lhs_last <= rhs_last {
                     unsafe {
-                        analyze_msb(lhs_pack.into(), msb_packed_result, j, simd_msb_mask);
+                        analyze_msb(lhs_pack, msb_packed_result, j, simd_msb_mask);
                     }
                     *lhs_i += N;
                 }
