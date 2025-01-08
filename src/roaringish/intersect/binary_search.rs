@@ -200,9 +200,9 @@ impl Intersect for BinarySearchIntersect {
             for rhs_packed in rhs.0.iter().copied() {
                 let rhs_doc_id_group = clear_values(rhs_packed);
                 let rhs_values = unpack_values(rhs_packed);
-                let k = match lhs
-                    .binary_search_by_key(&rhs_doc_id_group, |lhs_packed| clear_values(*lhs_packed + add_to_group))
-                {
+                let k = match lhs.binary_search_by_key(&rhs_doc_id_group, |lhs_packed| {
+                    clear_values(*lhs_packed + add_to_group)
+                }) {
                     Ok(k) => {
                         check_msb!(
                             packed_result,

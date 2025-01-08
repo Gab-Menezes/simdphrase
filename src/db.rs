@@ -1042,7 +1042,7 @@ where
         let mut lhs_len = lhs.len() as u32;
         let lhs = token_to_packed.get(lhs).unwrap();
 
-        let rhs = &final_tokens[i+1];
+        let rhs = &final_tokens[i + 1];
         let mut rhs_len = rhs.len() as u32;
         let rhs = token_to_packed.get(rhs).unwrap();
 
@@ -1069,13 +1069,13 @@ where
                     } else {
                         result = result_borrow.intersect::<I>(*rhs, rhs_len, stats);
                         result_borrow = BorrowRoaringishPacked::new(&result);
-    
+
                         lhs_len += rhs_len;
                         rhs_len = t_rhs.len() as u32;
 
                         right_i += 1;
                     }
-                },
+                }
                 (Some(t_lhs), None) => {
                     let lhs = token_to_packed.get(t_lhs).unwrap();
                     lhs_len += t_lhs.len() as u32;
@@ -1084,7 +1084,7 @@ where
                     result_borrow = BorrowRoaringishPacked::new(&result);
 
                     left_i = left_i.wrapping_sub(1);
-                },
+                }
                 (None, Some(t_rhs)) => {
                     let rhs = token_to_packed.get(t_rhs).unwrap();
 
@@ -1095,7 +1095,7 @@ where
                     rhs_len = t_rhs.len() as u32;
 
                     right_i += 1;
-                },
+                }
                 (None, None) => break,
             }
         }

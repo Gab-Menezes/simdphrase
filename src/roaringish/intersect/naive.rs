@@ -36,7 +36,8 @@ impl Intersect for NaiveIntersect {
         let b = std::time::Instant::now();
 
         while *lhs_i < lhs.0.len() && *rhs_i < rhs.0.len() {
-            let lhs_packed = unsafe { *lhs.0.get_unchecked(*lhs_i) } + if FIRST { add_to_group } else { 0 };
+            let lhs_packed =
+                unsafe { *lhs.0.get_unchecked(*lhs_i) } + if FIRST { add_to_group } else { 0 };
             let lhs_doc_id_group = clear_values(lhs_packed);
             let lhs_values = unpack_values(lhs_packed);
 
