@@ -14,8 +14,8 @@ use std::{
     sync::atomic::Ordering::Relaxed,
 };
 
-use crate::Stats;
 use crate::allocator::Aligned64;
+use crate::Stats;
 
 use self::intersect::Intersect;
 
@@ -330,7 +330,8 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         let proportion = lhs.len().max(rhs.len()) / lhs.len().min(rhs.len());
         if proportion >= FIRST_GALLOP_INTERSECT {
             let (packed, _) = GallopIntersectFirst::intersect::<true>(lhs, rhs, lhs_len, stats);
-            let (msb_packed, _) = GallopIntersectFirst::intersect::<false>(lhs, rhs, lhs_len, stats);
+            let (msb_packed, _) =
+                GallopIntersectFirst::intersect::<false>(lhs, rhs, lhs_len, stats);
             stats
                 .first_intersect
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
@@ -342,7 +343,6 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-
         let mut msb_packed = BorrowRoaringishPacked::new(&msb_packed);
 
         let b = std::time::Instant::now();
@@ -352,13 +352,18 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
-        let proportion = msb_packed.len().max(rhs.len()).checked_div(msb_packed.len().min(rhs.len()));
+        let proportion = msb_packed
+            .len()
+            .max(rhs.len())
+            .checked_div(msb_packed.len().min(rhs.len()));
         let (msb_packed, _) = match proportion {
-            Some(proportion) => if proportion >= SECOND_GALLOP_INTERSECT {
-                GallopIntersectSecond::intersect::<false>(msb_packed, rhs, lhs_len, stats)
-            } else {
-                I::intersect::<false>(msb_packed, rhs, lhs_len, stats)
-            },
+            Some(proportion) => {
+                if proportion >= SECOND_GALLOP_INTERSECT {
+                    GallopIntersectSecond::intersect::<false>(msb_packed, rhs, lhs_len, stats)
+                } else {
+                    I::intersect::<false>(msb_packed, rhs, lhs_len, stats)
+                }
+            }
             None => I::intersect::<false>(msb_packed, rhs, lhs_len, stats),
         };
         stats
@@ -371,7 +376,11 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     // This function neeeds to be inline always, for some reason not inlining this
     // function makes some queries performance unpredictable
     #[inline(always)]
-    fn merge_results(packed: Vec<u64, Aligned64>, msb_packed: Vec<u64, Aligned64>, stats: &Stats) -> RoaringishPacked {
+    fn merge_results(
+        packed: Vec<u64, Aligned64>,
+        msb_packed: Vec<u64, Aligned64>,
+        stats: &Stats,
+    ) -> RoaringishPacked {
         let b = std::time::Instant::now();
         let capacity = packed.len() + msb_packed.len();
         let mut r_packed = Box::new_uninit_slice_in(capacity, Aligned64::default());

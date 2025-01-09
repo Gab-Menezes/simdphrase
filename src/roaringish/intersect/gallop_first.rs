@@ -37,7 +37,8 @@ impl Intersect for GallopIntersectFirst {
             let mut rhs_delta = 1;
 
             while *lhs_i < lhs.len()
-                && clear_values(lhs[*lhs_i]) + add_to_group + if FIRST { 0 } else { ADD_ONE_GROUP } < clear_values(rhs[*rhs_i])
+                && clear_values(lhs[*lhs_i]) + add_to_group + if FIRST { 0 } else { ADD_ONE_GROUP }
+                    < clear_values(rhs[*rhs_i])
             {
                 *lhs_i += lhs_delta;
                 lhs_delta *= 2;
@@ -45,14 +46,19 @@ impl Intersect for GallopIntersectFirst {
             *lhs_i -= lhs_delta / 2;
 
             while *rhs_i < rhs.len()
-                && clear_values(rhs[*rhs_i]) < unsafe { clear_values(*lhs.get_unchecked(*lhs_i)) } + add_to_group + if FIRST { 0 } else { ADD_ONE_GROUP }
+                && clear_values(rhs[*rhs_i])
+                    < unsafe { clear_values(*lhs.get_unchecked(*lhs_i)) }
+                        + add_to_group
+                        + if FIRST { 0 } else { ADD_ONE_GROUP }
             {
                 *rhs_i += rhs_delta;
                 rhs_delta *= 2;
             }
             *rhs_i -= rhs_delta / 2;
 
-            let lhs_packed = unsafe { *lhs.get_unchecked(*lhs_i) } + add_to_group + if FIRST { 0 } else { ADD_ONE_GROUP };
+            let lhs_packed = unsafe { *lhs.get_unchecked(*lhs_i) }
+                + add_to_group
+                + if FIRST { 0 } else { ADD_ONE_GROUP };
             let rhs_packed = unsafe { *rhs.get_unchecked(*rhs_i) };
 
             let lhs_doc_id_group = clear_values(lhs_packed);
@@ -72,20 +78,20 @@ impl Intersect for GallopIntersectFirst {
                     };
                     unsafe {
                         packed_result
-                        .get_unchecked_mut(*i)
-                        .write(lhs_doc_id_group | intersection as u64);
+                            .get_unchecked_mut(*i)
+                            .write(lhs_doc_id_group | intersection as u64);
                     }
                     *i += (intersection > 0) as usize;
-                    
+
                     *lhs_i += 1;
                     *rhs_i += 1;
-                },
+                }
             }
         }
 
         stats
-        .first_intersect_gallop
-        .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+            .first_intersect_gallop
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
     }
 
     fn intersection_buffer_size(

@@ -36,9 +36,7 @@ impl Intersect for GallopIntersectSecond {
             let mut lhs_delta = 1;
             let mut rhs_delta = 1;
 
-            while *lhs_i < lhs.len()
-                && clear_values(lhs[*lhs_i]) < clear_values(rhs[*rhs_i])
-            {
+            while *lhs_i < lhs.len() && clear_values(lhs[*lhs_i]) < clear_values(rhs[*rhs_i]) {
                 *lhs_i += lhs_delta;
                 lhs_delta *= 2;
             }
@@ -65,17 +63,18 @@ impl Intersect for GallopIntersectSecond {
                 std::cmp::Ordering::Less => *lhs_i += 1,
                 std::cmp::Ordering::Greater => *rhs_i += 1,
                 std::cmp::Ordering::Equal => {
-                    let intersection = lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
+                    let intersection =
+                        lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
                     unsafe {
                         packed_result
-                        .get_unchecked_mut(*i)
-                        .write(lhs_doc_id_group | intersection as u64);
+                            .get_unchecked_mut(*i)
+                            .write(lhs_doc_id_group | intersection as u64);
                     }
                     *i += (intersection > 0) as usize;
-                    
+
                     *lhs_i += 1;
                     *rhs_i += 1;
-                },
+                }
             }
 
             // // In micro benchmarking doing this version seems faster, but in the real
@@ -96,8 +95,8 @@ impl Intersect for GallopIntersectSecond {
         }
 
         stats
-        .second_intersect_gallop
-        .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
+            .second_intersect_gallop
+            .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
     }
 
     fn intersection_buffer_size(

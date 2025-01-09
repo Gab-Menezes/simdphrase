@@ -6,10 +6,10 @@ use crate::{allocator::Aligned64, Stats};
 
 use super::{Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP};
 
-pub mod naive;
-pub mod simd;
 pub mod gallop_first;
 pub mod gallop_second;
+pub mod naive;
+pub mod simd;
 
 mod private {
     pub trait IntersectSeal {}
