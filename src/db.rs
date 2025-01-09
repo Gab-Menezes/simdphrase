@@ -202,13 +202,13 @@ pub struct Stats {
     pub first_intersect: AtomicU64,
     pub first_intersect_simd: AtomicU64,
     pub first_intersect_naive: AtomicU64,
-    pub first_intersect_binary: AtomicU64,
+    pub first_intersect_gallop: AtomicU64,
 
     pub second_binary_search: AtomicU64,
     pub second_intersect: AtomicU64,
     pub second_intersect_simd: AtomicU64,
     pub second_intersect_naive: AtomicU64,
-    pub second_intersect_binary: AtomicU64,
+    pub second_intersect_gallop: AtomicU64,
 
     pub first_result: AtomicU64,
     pub second_result: AtomicU64,
@@ -237,12 +237,12 @@ impl Debug for Stats {
         let first_intersect = self.first_intersect.load(Relaxed) as f64;
         let first_intersect_simd = self.first_intersect_simd.load(Relaxed) as f64;
         let first_intersect_naive = self.first_intersect_naive.load(Relaxed) as f64;
-        let first_intersect_binary = self.first_intersect_binary.load(Relaxed) as f64;
+        let first_intersect_gallop = self.first_intersect_gallop.load(Relaxed) as f64;
         let second_binary_search = self.second_binary_search.load(Relaxed) as f64;
         let second_intersect = self.second_intersect.load(Relaxed) as f64;
         let second_intersect_simd = self.second_intersect_simd.load(Relaxed) as f64;
         let second_intersect_naive = self.second_intersect_naive.load(Relaxed) as f64;
-        let second_intersect_binary = self.second_intersect_binary.load(Relaxed) as f64;
+        let second_intersect_gallop = self.second_intersect_gallop.load(Relaxed) as f64;
         let first_result = self.first_result.load(Relaxed) as f64;
         let second_result = self.second_result.load(Relaxed) as f64;
         let get_doc_ids = self.get_doc_ids.load(Relaxed) as f64;
@@ -308,11 +308,11 @@ impl Debug for Stats {
                 ),
             )
             .field(
-                "    first_intersect_binary",
+                "    first_intersect_gallop",
                 &format_args!(
                     "    ({:08.3}ms, {:08.3}us/iter)",
-                    first_intersect_binary / 1000f64,
-                    first_intersect_binary / iters,
+                    first_intersect_gallop / 1000f64,
+                    first_intersect_gallop / iters,
                 ),
             )
             .field(
@@ -348,11 +348,11 @@ impl Debug for Stats {
                 ),
             )
             .field(
-                "    second_intersect_binary",
+                "    second_intersect_gallop",
                 &format_args!(
                     "   ({:08.3}ms, {:08.3}us/iter)",
-                    second_intersect_binary / 1000f64,
-                    second_intersect_binary / iters,
+                    second_intersect_gallop / 1000f64,
+                    second_intersect_gallop / iters,
                 ),
             )
             .field(
@@ -1052,11 +1052,7 @@ where
         let mut left_i = i.wrapping_sub(1);
         let mut right_i = i + 2;
 
-        // let mut k = 0;
         loop {
-            // println!("{k}");
-            // k += 1;
-
             let lhs = final_tokens.get(left_i);
             let rhs = final_tokens.get(right_i);
             match (lhs, rhs) {

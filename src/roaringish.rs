@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::Stats;
-use crate::{allocator::Aligned64, binary_search::BinarySearchIntersect};
+use crate::allocator::Aligned64;
 
 use self::intersect::Intersect;
 
@@ -255,7 +255,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         lhs_len: u32,
         stats: &Stats,
     ) -> RoaringishPacked {
-        const FIRST_BINARY_SEARCH_INTERSECT: usize = 650;
+        const FIRST_GALLOP_INTERSECT: usize = 650;
         const SECOND_GALLOP_INTERSECT: usize = 120;
 
         #[inline(always)]
@@ -328,7 +328,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
 
         let b = std::time::Instant::now();
         let proportion = lhs.len().max(rhs.len()) / lhs.len().min(rhs.len());
-        if proportion >= FIRST_BINARY_SEARCH_INTERSECT {
+        if proportion >= FIRST_GALLOP_INTERSECT {
             let (packed, _) = GallopIntersectFirst::intersect::<true>(lhs, rhs, lhs_len, stats);
             let (msb_packed, _) = GallopIntersectFirst::intersect::<false>(lhs, rhs, lhs_len, stats);
             stats
@@ -342,9 +342,6 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .first_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        if !I::needs_second_pass() {
-            return RoaringishPacked(packed);
-        }
 
         let mut msb_packed = BorrowRoaringishPacked::new(&msb_packed);
 
@@ -371,7 +368,9 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         Self::merge_results(packed, msb_packed, stats)
     }
 
-    #[inline(never)]
+    // This function neeeds to be inline always, for some reason not inlining this
+    // function makes some queries performance unpredictable
+    #[inline(always)]
     fn merge_results(packed: Vec<u64, Aligned64>, msb_packed: Vec<u64, Aligned64>, stats: &Stats) -> RoaringishPacked {
         let b = std::time::Instant::now();
         let capacity = packed.len() + msb_packed.len();

@@ -20,12 +20,12 @@ impl Intersect for GallopIntersectSecond {
         packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         i: &mut usize,
 
-        msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
-        j: &mut usize,
+        _msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        _j: &mut usize,
 
-        add_to_group: u64,
+        _add_to_group: u64,
         lhs_len: u16,
-        msb_mask: u16,
+        _msb_mask: u16,
         lsb_mask: u16,
 
         stats: &Stats,
@@ -78,6 +78,9 @@ impl Intersect for GallopIntersectSecond {
                 },
             }
 
+            // // In micro benchmarking doing this version seems faster, but in the real
+            // // use case is slower
+
             // let intersection = lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
             // if lhs_doc_id_group == rhs_doc_id_group && intersection > 0 {
             //     unsafe {
@@ -93,7 +96,7 @@ impl Intersect for GallopIntersectSecond {
         }
 
         stats
-        .second_intersect_binary
+        .second_intersect_gallop
         .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
     }
 
@@ -102,9 +105,5 @@ impl Intersect for GallopIntersectSecond {
         rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> usize {
         lhs.0.len().min(rhs.0.len())
-    }
-
-    fn needs_second_pass() -> bool {
-        false
     }
 }

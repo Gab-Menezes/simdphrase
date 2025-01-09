@@ -6,7 +6,6 @@ use crate::{allocator::Aligned64, Stats};
 
 use super::{Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP};
 
-pub mod binary_search;
 pub mod naive;
 pub mod simd;
 pub mod gallop_first;
@@ -103,6 +102,4 @@ pub trait Intersect: private::IntersectSeal {
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> usize;
-
-    fn needs_second_pass() -> bool;
 }

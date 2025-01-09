@@ -20,12 +20,12 @@ impl Intersect for GallopIntersectFirst {
         packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
         i: &mut usize,
 
-        msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
-        j: &mut usize,
+        _msb_packed_result: &mut Box<[MaybeUninit<u64>], Aligned64>,
+        _j: &mut usize,
 
         add_to_group: u64,
         lhs_len: u16,
-        msb_mask: u16,
+        _msb_mask: u16,
         lsb_mask: u16,
 
         stats: &Stats,
@@ -81,34 +81,11 @@ impl Intersect for GallopIntersectFirst {
                     *rhs_i += 1;
                 },
             }
-
-            // let intersection = lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
-            // if lhs_doc_id_group == rhs_doc_id_group && intersection > 0 {
-            //     unsafe {
-            //         packed_result
-            //         .get_unchecked_mut(*i)
-            //         .write(lhs_doc_id_group | intersection as u64);
-            //     }
-            //     *i += 1;
-            // }
-
-            // *lhs_i += (lhs_doc_id_group <= rhs_doc_id_group) as usize;
-            // *rhs_i += (lhs_doc_id_group >= rhs_doc_id_group) as usize;
         }
 
         stats
-        .first_intersect_binary
+        .first_intersect_gallop
         .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-
-        // if FIRST {
-        //     stats
-        //         .first_intersect_binary
-        //         .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-        // } else {
-        //     stats
-        //         .second_intersect_binary
-        //         .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-        // }
     }
 
     fn intersection_buffer_size(
@@ -116,9 +93,5 @@ impl Intersect for GallopIntersectFirst {
         rhs: BorrowRoaringishPacked<'_, Aligned>,
     ) -> usize {
         lhs.0.len().min(rhs.0.len())
-    }
-
-    fn needs_second_pass() -> bool {
-        false
     }
 }

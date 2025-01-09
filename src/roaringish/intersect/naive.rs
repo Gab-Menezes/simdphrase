@@ -103,8 +103,4 @@ impl Intersect for NaiveIntersect {
     ) -> usize {
         lhs.0.len().min(rhs.0.len())
     }
-
-    fn needs_second_pass() -> bool {
-        true
-    }
 }
