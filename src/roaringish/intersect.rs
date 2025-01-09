@@ -9,7 +9,8 @@ use super::{Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP};
 pub mod binary_search;
 pub mod naive;
 pub mod simd;
-pub mod gallop;
+pub mod gallop_first;
+pub mod gallop_second;
 
 mod private {
     pub trait IntersectSeal {}

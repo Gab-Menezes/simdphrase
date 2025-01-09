@@ -1052,7 +1052,11 @@ where
         let mut left_i = i.wrapping_sub(1);
         let mut right_i = i + 2;
 
+        // let mut k = 0;
         loop {
+            // println!("{k}");
+            // k += 1;
+
             let lhs = final_tokens.get(left_i);
             let rhs = final_tokens.get(right_i);
             match (lhs, rhs) {

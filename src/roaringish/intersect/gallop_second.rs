@@ -7,9 +7,9 @@ use crate::{
 
 use super::{private::IntersectSeal, Intersect};
 
-pub struct GallopIntersect;
-impl IntersectSeal for GallopIntersect {}
-impl Intersect for GallopIntersect {
+pub struct GallopIntersectSecond;
+impl IntersectSeal for GallopIntersectSecond {}
+impl Intersect for GallopIntersectSecond {
     fn inner_intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,
@@ -92,15 +92,9 @@ impl Intersect for GallopIntersect {
             // *rhs_i += (lhs_doc_id_group >= rhs_doc_id_group) as usize;
         }
 
-        if FIRST {
-            stats
-                .first_intersect_binary
-                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-        } else {
-            stats
-                .second_intersect_binary
-                .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
-        }
+        stats
+        .second_intersect_binary
+        .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
     }
 
     fn intersection_buffer_size(

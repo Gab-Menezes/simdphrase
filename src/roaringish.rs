@@ -1,7 +1,7 @@
 pub mod intersect;
 
 use arbitrary::{Arbitrary, Unstructured};
-use intersect::gallop::GallopIntersect;
+use intersect::{gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond};
 use rkyv::{with::InlineAsBox, Archive, Serialize};
 use std::{
     arch::x86_64::_mm256_mask_compressstoreu_epi32,
@@ -329,12 +329,13 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         let b = std::time::Instant::now();
         let proportion = lhs.len().max(rhs.len()) / lhs.len().min(rhs.len());
         if proportion >= FIRST_BINARY_SEARCH_INTERSECT {
-            let (packed, _) = BinarySearchIntersect::intersect::<true>(lhs, rhs, lhs_len, stats);
+            let (packed, _) = GallopIntersectFirst::intersect::<true>(lhs, rhs, lhs_len, stats);
+            let (msb_packed, _) = GallopIntersectFirst::intersect::<false>(lhs, rhs, lhs_len, stats);
             stats
                 .first_intersect
                 .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-            return RoaringishPacked(packed);
+            return Self::merge_results(packed, msb_packed, stats);
         }
         let (packed, msb_packed) = I::intersect::<true>(lhs, rhs, lhs_len, stats);
         stats
@@ -357,7 +358,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         let proportion = msb_packed.len().max(rhs.len()).checked_div(msb_packed.len().min(rhs.len()));
         let (msb_packed, _) = match proportion {
             Some(proportion) => if proportion >= SECOND_GALLOP_INTERSECT {
-                GallopIntersect::intersect::<false>(msb_packed, rhs, lhs_len, stats)
+                GallopIntersectSecond::intersect::<false>(msb_packed, rhs, lhs_len, stats)
             } else {
                 I::intersect::<false>(msb_packed, rhs, lhs_len, stats)
             },
@@ -367,6 +368,11 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
+        Self::merge_results(packed, msb_packed, stats)
+    }
+
+    #[inline(never)]
+    fn merge_results(packed: Vec<u64, Aligned64>, msb_packed: Vec<u64, Aligned64>, stats: &Stats) -> RoaringishPacked {
         let b = std::time::Instant::now();
         let capacity = packed.len() + msb_packed.len();
         let mut r_packed = Box::new_uninit_slice_in(capacity, Aligned64::default());
