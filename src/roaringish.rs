@@ -255,7 +255,8 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         lhs_len: u32,
         stats: &Stats,
     ) -> RoaringishPacked {
-        const BINARY_SEARCH_INTERSECT: usize = 650;
+        const FIRST_BINARY_SEARCH_INTERSECT: usize = 650;
+        const SECOND_GALLOP_INTERSECT: usize = 120;
 
         #[inline(always)]
         fn binary_search(
@@ -327,7 +328,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
 
         let b = std::time::Instant::now();
         let proportion = lhs.len().max(rhs.len()) / lhs.len().min(rhs.len());
-        if proportion >= BINARY_SEARCH_INTERSECT {
+        if proportion >= FIRST_BINARY_SEARCH_INTERSECT {
             let (packed, _) = BinarySearchIntersect::intersect::<true>(lhs, rhs, lhs_len, stats);
             stats
                 .first_intersect
@@ -355,7 +356,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         let b = std::time::Instant::now();
         let proportion = msb_packed.len().max(rhs.len()).checked_div(msb_packed.len().min(rhs.len()));
         let (msb_packed, _) = match proportion {
-            Some(proportion) => if proportion >= BINARY_SEARCH_INTERSECT {
+            Some(proportion) => if proportion >= SECOND_GALLOP_INTERSECT {
                 GallopIntersect::intersect::<false>(msb_packed, rhs, lhs_len, stats)
             } else {
                 I::intersect::<false>(msb_packed, rhs, lhs_len, stats)
