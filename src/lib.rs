@@ -30,6 +30,7 @@ pub use db::{Stats, DB};
 pub use indexer::CommonTokens;
 pub use indexer::Indexer;
 
+pub use roaringish::intersect::gallop;
 pub use roaringish::intersect::binary_search;
 pub use roaringish::intersect::naive;
 

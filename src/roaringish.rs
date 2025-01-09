@@ -1,6 +1,7 @@
 pub mod intersect;
 
 use arbitrary::{Arbitrary, Unstructured};
+use intersect::gallop::GallopIntersect;
 use rkyv::{with::InlineAsBox, Archive, Serialize};
 use std::{
     arch::x86_64::_mm256_mask_compressstoreu_epi32,
@@ -352,7 +353,15 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
-        let (msb_packed, _) = I::intersect::<false>(msb_packed, rhs, lhs_len, stats);
+        let proportion = msb_packed.len().max(rhs.len()).checked_div(msb_packed.len().min(rhs.len()));
+        let (msb_packed, _) = match proportion {
+            Some(proportion) => if proportion >= BINARY_SEARCH_INTERSECT {
+                GallopIntersect::intersect::<false>(msb_packed, rhs, lhs_len, stats)
+            } else {
+                I::intersect::<false>(msb_packed, rhs, lhs_len, stats)
+            },
+            None => I::intersect::<false>(msb_packed, rhs, lhs_len, stats),
+        };
         stats
             .second_intersect
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
