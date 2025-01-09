@@ -70,7 +70,7 @@ impl Tokens {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 struct RefTokens<'a> {
     tokens: &'a str,
     positions: &'a [(usize, usize)],
@@ -151,6 +151,15 @@ impl Index<usize> for RefTokens<'_> {
     fn index(&self, index: usize) -> &Self::Output {
         let (b, e) = self.positions[index];
         unsafe { self.tokens.get_unchecked(b..e) }
+    }
+}
+
+impl Debug for RefTokens<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefTokens")
+            .field("tokens", &self.tokens())
+            .field("positions", &self.positions)
+            .finish()
     }
 }
 
