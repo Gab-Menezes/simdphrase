@@ -39,6 +39,7 @@ rustflags = [
     "-C", "target-cpu=native", 
     "-Z", "tune-cpu=native",
     "-C", "llvm-args=-align-all-functions=6",
+    # "-Z", "build-std=core,alloc,std,panic_abort",
     # "-C", "llvm-args=-align-all-nofallthru-blocks=6",
     # "-C", "llvm-args=-align-loops=64",
 
@@ -47,3 +48,6 @@ rustflags = [
     # "-C", "target-feature=-avx512f",
     # "-C", "target-feature=-avx512vp2intersect",
 ]
+
+# [unstable]
+# build-std = ["core", "alloc", "std", "panic_abort"]

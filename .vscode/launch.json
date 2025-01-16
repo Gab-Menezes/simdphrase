@@ -20,8 +20,8 @@
                 },
                 "env": {
                     // "RUSTFLAGS": "-C target-feature=+avx"
-                    // "RUSTFLAGS": "-C target-cpu=native"
-                    "RUSTFLAGS": "-C target-feature=+aes",
+                    "RUSTFLAGS": "-C target-cpu=native"
+                    // "RUSTFLAGS": "-C target-feature=+aes",
                 }
             },
             "args": [

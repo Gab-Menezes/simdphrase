@@ -898,24 +898,40 @@ where
             final_score
         }
 
-        // TODO: FIX
-        // if common_tokens.is_empty() {
-        //     let mut choices = Vec::with_capacity(tokens.len());
-        //     let mut token_to_packed = GxHashMap::with_capacity(tokens.len());
-        //     for token in tokens.iter() {
-        //         match self.get_roaringish_packed(rotxn, token, mmap) {
-        //             Some(packed) => token_to_packed.insert(token, packed),
-        //             None => return (Vec::new(), GxHashMap::new()),
-        //         };
-        //         choices.push(token);
-        //     }
-        //     return (choices, token_to_packed);
-        // }
+        if common_tokens.is_empty() {
+            let mut token_to_packed = GxHashMap::with_capacity(tokens.len());
+
+            let (mut rem, token) = tokens.split_at(tokens.len() - 1);
+            match self.get_roaringish_packed(rotxn, token.tokens(), mmap) {
+                Some(packed) => token_to_packed.insert(token, packed),
+                None => return (None, GxHashMap::new()),
+            };
+            let mut r = bump.alloc(RefTokenLinkedList {
+                tokens: token,
+                next: None,
+            });
+
+            let j = rem.len();
+            for _ in 0..j {
+                let (temp_rem, token) = rem.split_at(rem.len() - 1);
+                match self.get_roaringish_packed(rotxn, token.tokens(), mmap) {
+                    Some(packed) => token_to_packed.insert(token, packed),
+                    None => return (None, GxHashMap::new()),
+                };
+                let temp_r = bump.alloc(RefTokenLinkedList {
+                    tokens: token,
+                    next: Some(r),
+                });
+                r = temp_r;
+                rem = temp_rem;
+            }
+
+            return (Some(*r), token_to_packed);
+        }
 
         let len = tokens.reserve_len();
         let mut memo_token_to_score_choices = GxHashMap::with_capacity(len);
         let mut token_to_packed = GxHashMap::with_capacity(len);
-        // let bump = Bump::with_capacity(std::mem::size_of::<RefTokenLinkedList>() * len);
 
         let score = match check_before_recursion(
             self,
@@ -938,16 +954,6 @@ where
                 bump,
             ),
         };
-
-        // println!("reserved: {}", len);
-        // println!(
-        //     "memo_token_to_score_choices: {}",
-        //     memo_token_to_score_choices.len()
-        // );
-        // println!("token_to_packed: {}", token_to_packed.len());
-        // println!("tokens: {}", tokens.len());
-        // println!("calls: {count}");
-        // println!("score: {score}");
 
         if score == 0 {
             return (None, GxHashMap::new());
