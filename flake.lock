@@ -1,5 +1,26 @@
 {
   "nodes": {
+    "fenix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-analyzer-src": "rust-analyzer-src"
+      },
+      "locked": {
+        "lastModified": 1736058609,
+        "narHash": "sha256-IAE2l4uRHm9EfV/3o4Uz639FMKG4p4aFhsm7pVmPxxI=",
+        "owner": "nix-community",
+        "repo": "fenix",
+        "rev": "2496106635e313223d42750681211f19fa8883b8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "fenix",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1735834308,
@@ -18,27 +39,24 @@
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "fenix": "fenix",
+        "nixpkgs": "nixpkgs"
       }
     },
-    "rust-overlay": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
+    "rust-analyzer-src": {
+      "flake": false,
       "locked": {
-        "lastModified": 1736476219,
-        "narHash": "sha256-+qyv3QqdZCdZ3cSO/cbpEY6tntyYjfe1bB12mdpNFaY=",
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "rev": "de30cc5963da22e9742bbbbb9a3344570ed237b9",
+        "lastModified": 1736009406,
+        "narHash": "sha256-5P+kK7S64/Mg8NrGQ3ScqoRW7vJAKzoeGJCFhEbldN0=",
+        "owner": "rust-lang",
+        "repo": "rust-analyzer",
+        "rev": "6725e046df7493c1047e115ebc7180fb06416038",
         "type": "github"
       },
       "original": {
-        "owner": "oxalica",
-        "repo": "rust-overlay",
+        "owner": "rust-lang",
+        "ref": "nightly",
+        "repo": "rust-analyzer",
         "type": "github"
       }
     }

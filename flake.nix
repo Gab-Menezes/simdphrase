@@ -1,51 +1,56 @@
-# Doc for nix-ld: https://github.com/nix-community/nix-ld
-# https://github.com/mcdonc/.nixconfig/blob/master/videos/pydev/script.rst
-# https://www.youtube.com/watch?v=7lVP4NJWJ9g
-# https://github.com/Mic92/dotfiles/blob/main/machines/modules/fhs-compat.nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
+    fenix = {
+      url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, ... }:
+  outputs = { self, nixpkgs, fenix, ... }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { 
         inherit system; 
-        overlays = [ rust-overlay.overlays.default ];
+        overlays = [ fenix.overlays.default ];
       };
-      rustbin = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
-        extensions = [ "rust-src" "rust-analyzer" "miri" ];
-      });
-
-      clangVersion = "19";
+      libPath = with pkgs; lib.makeLibraryPath [
+        stdenv.cc.cc
+      ];
     in 
     {
       devShells.${system}.default = pkgs.mkShell {
-        packages = [
-          rustbin
+        buildInputs = [
+          (pkgs.fenix.complete.withComponents [
+              "cargo"
+              "clippy"
+              "rust-src"
+              "rustc"
+              "rustfmt"
+              "miri"
+          ])
           pkgs.cargo-show-asm
           pkgs.cargo-expand
           pkgs.cargo-flamegraph
           pkgs.cargo-valgrind
           pkgs.cargo-fuzz
           pkgs.cargo-pgo
-          pkgs.rustfilt
 
+          pkgs.rust-analyzer-nightly
           pkgs.openssl
           pkgs.pkg-config
 
-          pkgs."clang_${clangVersion}"
-          pkgs."llvmPackages_${clangVersion}".bintools
-          pkgs."bolt_${clangVersion}"
-          pkgs.cmake
+          pkgs.clang_19
+          pkgs.llvmPackages_19.bintools
+          pkgs.bolt_19
+          pkgs.rustfilt
         ];
 
-        LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs."llvmPackages_${clangVersion}".libclang.lib ];
+        #LD_LIBRARY_PATH = libPath;
+        shellHook = ''
+          export LD_LIBRARY_PATH=$NIX_LD_LIBRARY_PATH
+        '';
+
       };
     };
 }
