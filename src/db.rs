@@ -97,6 +97,14 @@ impl RefTokens<'_> {
             .map(|(b, e)| unsafe { self.tokens.get_unchecked(*b..*e) })
     }
 
+    fn ref_token_iter(&self) -> impl Iterator<Item = Self> + '_ {
+        (0..self.positions.len())
+        .map(|i| Self {
+            tokens: self.tokens,
+            positions: &self.positions[i..i+1]
+        })
+    }
+
     fn iter(&self) -> impl Iterator<Item = &str> {
         self.positions
             .iter()
@@ -731,7 +739,9 @@ where
         )
     }
 
-    #[inline(always)]
+    // This function neeeds to be inline never, for some reason inlining this
+    // function makes some queries performance unpredictable
+    #[inline(never)]
     fn merge_and_minimize_tokens<'a, 'b, 'alloc>(
         &self,
         rotxn: &RoTxn,
@@ -741,7 +751,7 @@ where
 
         bump: &'alloc Bump,
     ) -> (
-        Option<RefTokenLinkedList<'a, 'alloc>>,
+        Vec<RefTokens<'a>>,
         GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
     ) {
         #[inline(always)]
@@ -898,35 +908,40 @@ where
             final_score
         }
 
-        if common_tokens.is_empty() {
-            let mut token_to_packed = GxHashMap::with_capacity(tokens.len());
+        // This function neeeds to be inline never, for some reason inlining this
+        // function makes some queries performance unpredictable
+        #[inline(never)]
+        fn no_common_tokens<'a, 'b, 'alloc, D>(
+            me: &DB<D>,
+            rotxn: &RoTxn,
+            tokens: RefTokens<'a>,
+            mmap: &'b Mmap,
+        ) -> (
+            Vec<RefTokens<'a>>,
+            GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+        )
+        where
+            D: for<'c> Serialize<HighSerializer<AlignedVec, ArenaHandle<'c>, rkyv::rancor::Error>>
+                + Archive
+                + 'static,
+        {
+            let l = tokens.len();
+            let mut token_to_packed = GxHashMap::with_capacity(l);
+            let mut v = Vec::with_capacity(l);
 
-            let (mut rem, token) = tokens.split_at(tokens.len() - 1);
-            match self.get_roaringish_packed(rotxn, token.tokens(), mmap) {
-                Some(packed) => token_to_packed.insert(token, packed),
-                None => return (None, GxHashMap::new()),
-            };
-            let mut r = bump.alloc(RefTokenLinkedList {
-                tokens: token,
-                next: None,
-            });
-
-            let j = rem.len();
-            for _ in 0..j {
-                let (temp_rem, token) = rem.split_at(rem.len() - 1);
-                match self.get_roaringish_packed(rotxn, token.tokens(), mmap) {
+            for token in tokens.ref_token_iter() {
+                match me.get_roaringish_packed(rotxn, token.tokens(), mmap) {
                     Some(packed) => token_to_packed.insert(token, packed),
-                    None => return (None, GxHashMap::new()),
+                    None => return (Vec::new(), GxHashMap::new()),
                 };
-                let temp_r = bump.alloc(RefTokenLinkedList {
-                    tokens: token,
-                    next: Some(r),
-                });
-                r = temp_r;
-                rem = temp_rem;
+                v.push(token);
             }
 
-            return (Some(*r), token_to_packed);
+            return (v, token_to_packed);
+        }
+
+        if common_tokens.is_empty() {
+            return no_common_tokens(self, rotxn, tokens, mmap);
         }
 
         let len = tokens.reserve_len();
@@ -956,11 +971,14 @@ where
         };
 
         if score == 0 {
-            return (None, GxHashMap::new());
+            return (Vec::new(), GxHashMap::new());
         }
         match memo_token_to_score_choices.remove(&tokens) {
-            Some((_, choices)) => (Some(*choices), token_to_packed),
-            None => (None, GxHashMap::new()),
+            Some((_, choices)) => {
+                let v = choices.iter().copied().collect();
+                (v, token_to_packed)
+            },
+            None => (Vec::new(), GxHashMap::new()),
         }
     }
 
@@ -1028,18 +1046,16 @@ where
             .merge
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
-        let Some(final_tokens) = final_tokens else {
+        if final_tokens.is_empty() {
             return Vec::new();
-        };
+        }
 
-        if final_tokens.next.is_none() {
+        if final_tokens.len() == 1 {
             return token_to_packed
-                .get(&final_tokens.tokens)
+                .get(&final_tokens[0])
                 .unwrap()
                 .get_doc_ids(stats);
         }
-
-        let final_tokens: Vec<_> = final_tokens.iter().copied().collect();
 
         let mut min = usize::MAX;
         let mut i = usize::MAX;
