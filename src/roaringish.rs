@@ -327,6 +327,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         let b = std::time::Instant::now();
+        // this can't fail we just checked
         let proportion = lhs.len().max(rhs.len()) / lhs.len().min(rhs.len());
         if proportion >= FIRST_GALLOP_INTERSECT {
             let (packed, _) = GallopIntersectFirst::intersect::<true>(lhs, rhs, lhs_len, stats);
@@ -433,7 +434,6 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
                         // so we can just `or` the new value with the previous one
                         let r = r_packed.get_unchecked_mut(r_i - 1).assume_init_mut();
                         *r |= msb_values as u64;
-                        // *r |= msb_pack;
                     } else if msb_values > 0 {
                         r_packed.get_unchecked_mut(r_i).write(msb_pack);
                         r_i += 1;
