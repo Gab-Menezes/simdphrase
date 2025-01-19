@@ -793,8 +793,6 @@ where
             Some(score)
         }
 
-        // TODO: improve this, temporary code just to make sure things working
-        // maybe use smallvec ?
         #[allow(clippy::too_many_arguments)]
         fn inner_merge_and_minimize_tokens<'a, 'b, 'c, 'alloc, D>(
             me: &DB<D>,
