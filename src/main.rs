@@ -10,6 +10,7 @@
 // use arrow::array::{Int32Array, StringArray};
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use heed::{types::Str, Database, DatabaseFlags, EnvFlags, EnvOpenOptions};
 use core::str;
 use phrase_search::{SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
 use rkyv::{
@@ -82,7 +83,7 @@ where
 {
     type Intersect = SimdIntersect;
 
-    let searcher = Searcher::<D>::new(&args.index_name, args.db_size).unwrap();
+    let searcher = Searcher::<D>::new(&args.index_name).unwrap();
 
     let queries = std::fs::read_to_string(args.queries).unwrap();
     let queries: Vec<_> = queries.lines().collect();

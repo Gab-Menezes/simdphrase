@@ -508,12 +508,11 @@ where
         Ok(())
     }
 
-    pub fn open<P: AsRef<Path>>(path: P, db_size: usize) -> Result<(Self, HashSet<Box<str>>, Mmap), DbError> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<(Self, HashSet<Box<str>>, Mmap), DbError> {
         let path = path.as_ref();
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)
-                .map_size(db_size)
                 .flags(EnvFlags::READ_ONLY)
                 .open(path)?
         };
