@@ -2,20 +2,13 @@
 #![feature(array_windows)]
 #![feature(iter_intersperse)]
 #![feature(debug_closure_helpers)]
-#![feature(maybe_uninit_fill)]
-#![feature(maybe_uninit_write_slice)]
 #![feature(vec_push_within_capacity)]
 #![feature(trivial_bounds)]
 #![feature(portable_simd)]
 #![feature(stdarch_x86_avx512)]
 #![feature(avx512_target_feature)]
-#![feature(maybe_uninit_uninit_array)]
 #![feature(allocator_api)]
-#![feature(str_as_str)]
 #![feature(pointer_is_aligned_to)]
-#![feature(array_chunks)]
-#![feature(maybe_uninit_slice)]
-#![feature(new_range_api)]
 
 mod allocator;
 mod codecs;

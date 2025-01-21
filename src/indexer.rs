@@ -238,12 +238,12 @@ impl<D: Document> Batch<D> {
             for (pos, token_ids) in it.enumerate() {
                 let token_id = token_ids[0];
                 let token = &self.token_id_to_token[token_id as usize];
-                let is_first_token_rare = !common_tokens.contains(token.as_str());
+                let is_first_token_rare = !common_tokens.contains(token);
 
                 for i in 1..token_ids.len() {
                     let token_id = token_ids[i];
                     let token = &self.token_id_to_token[token_id as usize];
-                    let is_token_rare = !common_tokens.contains(token.as_str());
+                    let is_token_rare = !common_tokens.contains(token);
                     if is_first_token_rare && is_token_rare {
                         break;
                     }
