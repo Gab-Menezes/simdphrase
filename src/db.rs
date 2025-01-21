@@ -240,7 +240,7 @@ unsafe impl<D: Document> Sync for DB<D>
 impl<D: Document> DB<D> {
     pub fn truncate<P: AsRef<Path>>(path: P, db_size: usize) -> Result<Self, DbError> {
         let path = path.as_ref();
-        std::fs::remove_dir_all(path)?;
+        let _ = std::fs::remove_dir_all(path);
         std::fs::create_dir_all(path)?;
 
         let env = unsafe {
