@@ -1,6 +1,5 @@
 pub mod intersect;
 
-use arbitrary::{Arbitrary, Unstructured};
 use intersect::{gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond, Intersect};
 use rkyv::{with::InlineAsBox, Archive, Serialize};
 use std::{
@@ -8,7 +7,6 @@ use std::{
     fmt::{Binary, Debug, Display},
     marker::PhantomData,
     mem::MaybeUninit,
-    num::NonZero,
     ops::Deref,
     simd::{cmp::SimdPartialEq, num::SimdUint, LaneCount, Simd, SupportedLaneCount},
     sync::atomic::Ordering::Relaxed,
@@ -679,27 +677,5 @@ impl<A> Display for BorrowRoaringishPacked<'_, A> {
             (0..16u32).filter_map(move |i| ((values >> i) & 1 == 1).then_some((doc_id, s + i)))
         });
         f.debug_list().entries(it).finish()
-    }
-}
-
-impl<'a> Arbitrary<'a> for RoaringishPacked {
-    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        let len = u.arbitrary_len::<(u32, NonZero<u16>, NonZero<u16>)>()?;
-
-        let it = u
-            .arbitrary_iter::<(u32, NonZero<u16>, NonZero<u16>)>()?
-            .take(len);
-        let mut packed = Vec::with_capacity_in(len, Aligned64::default());
-        for v in it {
-            let (doc_id, group, value) = v?;
-            let pack = ((doc_id as u64) << 32)
-                | (((group.get() ^ u16::MAX) as u64) << 16)
-                | value.get() as u64;
-            packed.push(pack);
-        }
-        packed.sort_unstable_by_key(|p| clear_values(*p));
-        packed.dedup_by_key(|p| clear_values(*p));
-
-        Ok(Self(packed))
     }
 }
