@@ -244,7 +244,8 @@ where
         + Archive
         + 'static,
 {
-    pub fn truncate(path: &Path, db_size: usize) -> Result<Self, DbError> {
+    pub fn truncate<P: AsRef<Path>>(path: P, db_size: usize) -> Result<Self, DbError> {
+        let path = path.as_ref();
         std::fs::remove_dir_all(path)?;
         std::fs::create_dir_all(path)?;
 
@@ -507,7 +508,8 @@ where
         Ok(())
     }
 
-    pub fn open(path: &Path, db_size: usize) -> Result<(Self, HashSet<Box<str>>, Mmap), DbError> {
+    pub fn open<P: AsRef<Path>>(path: P, db_size: usize) -> Result<(Self, HashSet<Box<str>>, Mmap), DbError> {
+        let path = path.as_ref();
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)

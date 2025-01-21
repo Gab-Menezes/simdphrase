@@ -41,7 +41,7 @@ where
         + 'static,
 {
     /// Create a new searcher object.
-    pub fn new(path: &Path, db_size: usize) -> Result<Self, DbError> {
+    pub fn new<P: AsRef<Path>>(path: P, db_size: usize) -> Result<Self, DbError> {
         let (db, common_tokens, mmap) = DB::open(path, db_size)?;
         Ok(Self {
             db,

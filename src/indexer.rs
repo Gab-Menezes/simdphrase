@@ -350,13 +350,14 @@ impl Indexer {
     /// So the content of the document (`&str`) can be different from the stored version (`D`).
     /// 
     /// The type `D` is anything that can be serialized by [rkyv].
-    pub fn index<S, D, I>(&self, docs: I, path: &Path, db_size: usize) -> Result<u32, DbError>
+    pub fn index<S, D, I, P>(&self, docs: I, path: P, db_size: usize) -> Result<u32, DbError>
     where
         S: AsRef<str>,
         I: IntoIterator<Item = (S, D)>,
         D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
             + Archive
             + 'static,
+        P: AsRef<Path>,
     {
         let db = DB::truncate(path, db_size)?;
         let mut rwtxn = db.env.write_txn()?;
