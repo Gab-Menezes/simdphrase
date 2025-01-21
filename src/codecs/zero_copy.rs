@@ -19,7 +19,8 @@ where
     type EItem = T;
 
     fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, heed::BoxedError> {
-        let bytes = rkyv::to_bytes(item).unwrap();
+        // Serializing a value should never fail
+        let bytes = rkyv::to_bytes(item).unwrap();        
         Ok(Cow::Owned(bytes.to_vec()))
     }
 }

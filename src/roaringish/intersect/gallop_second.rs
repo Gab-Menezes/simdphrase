@@ -5,10 +5,12 @@ use crate::{
     Aligned64, BorrowRoaringishPacked, Stats,
 };
 
-use super::{private::IntersectSeal, Intersect};
+use super::{private::IntersectSeal, Intersect, Intersection};
 
 pub struct GallopIntersectSecond;
 impl IntersectSeal for GallopIntersectSecond {}
+impl Intersection for GallopIntersectSecond {}
+
 impl Intersect for GallopIntersectSecond {
     fn inner_intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,

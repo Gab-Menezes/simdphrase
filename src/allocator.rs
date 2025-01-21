@@ -12,7 +12,12 @@ unsafe impl<const N: usize> Allocator for AlignedAllocator<N> {
         &self,
         layout: std::alloc::Layout,
     ) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError> {
+        const { assert!(N.is_power_of_two()) };
+        const { assert!(N != 0) };
         unsafe {
+            // This probably will never fail, if it does
+            // what can I do ? Let it crash, something
+            // went wrong.
             let p = alloc(layout.align_to(N).unwrap());
             let s = std::ptr::slice_from_raw_parts_mut(p, layout.size());
             #[cfg(debug_assertions)]
@@ -24,6 +29,9 @@ unsafe impl<const N: usize> Allocator for AlignedAllocator<N> {
     }
 
     unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout) {
+        // This probably will never fail, if it does
+        // what can I do ? Let it crash, something
+        // went wrong.
         dealloc(ptr.as_ptr(), layout.align_to(N).unwrap());
     }
 }

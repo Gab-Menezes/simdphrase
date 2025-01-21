@@ -1,7 +1,7 @@
 pub mod intersect;
 
 use arbitrary::{Arbitrary, Unstructured};
-use intersect::{gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond};
+use intersect::{gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond, Intersect};
 use rkyv::{with::InlineAsBox, Archive, Serialize};
 use std::{
     arch::x86_64::_mm256_mask_compressstoreu_epi32,
@@ -14,53 +14,64 @@ use std::{
     sync::atomic::Ordering::Relaxed,
 };
 
-use crate::allocator::Aligned64;
+use crate::{allocator::Aligned64, Intersection};
 use crate::Stats;
-
-use self::intersect::Intersect;
 
 pub const MAX_VALUE: u32 = 16u32 * u16::MAX as u32;
 pub const ADD_ONE_GROUP: u64 = u16::MAX as u64 + 1;
 
+/// Group part of a position
 const fn group(val: u32) -> u16 {
     (val / 16) as u16
 }
 
+/// Value part of a position
 const fn value(val: u32) -> u16 {
     (val % 16) as u16
 }
 
+/// Group and value parts of a position
 const fn gv(val: u32) -> (u16, u16) {
     (group(val), value(val))
 }
 
+/// Puts the document ID in the 32 MSBs of the packed representation
 const fn pack_doc_id(doc_id: u32) -> u64 {
     (doc_id as u64) << 32
 }
 
+/// Puts the group in the middle of the packed representation
 const fn pack_group(group: u16) -> u64 {
     (group as u64) << 16
 }
 
+/// Packs a value into its packed representation
 const fn pack_value(value: u16) -> u64 {
     1 << value
 }
 
+/// Packs a document ID and group together (they should already be in their packed form)
 const fn pack_doc_id_group(packed_doc_id: u64, group: u16) -> u64 {
     packed_doc_id | pack_group(group)
 }
 
+/// Packs a document ID, group (they should already be in their packed form),
+/// also packs a value 
 const fn pack(packed_doc_id: u64, group: u16, value: u16) -> u64 {
     pack_doc_id_group(packed_doc_id, group) | pack_value(value)
 }
 
+/// Clears the values part of the packed representation
 const fn clear_values(packed: u64) -> u64 {
     packed & !0xFFFF
 }
+
+/// Clears the group and values part of the packed representation
 const fn clear_group_values(packed: u64) -> u64 {
     packed & !0xFFFFFFFF
 }
 
+/// Clears the values part of the packed representation
 #[inline(always)]
 fn clear_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N>
 where
@@ -69,10 +80,12 @@ where
     packed & Simd::splat(!0xFFFF)
 }
 
+/// Unpacks the document ID from the packed representation
 const fn unpack_doc_id(packed: u64) -> u32 {
     (packed >> 32) as u32
 }
 
+/// Unpacks the document ID from the packed representation
 #[allow(unused)]
 #[inline(always)]
 fn unpack_doc_id_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u32, N>
@@ -82,14 +95,17 @@ where
     (packed >> Simd::splat(32)).cast()
 }
 
+/// Unpacks the group from the packed representation
 const fn unpack_group(packed: u64) -> u16 {
     (packed >> 16) as u16
 }
 
+/// Unpacks the values from the packed representation
 const fn unpack_values(packed: u64) -> u16 {
     packed as u16
 }
 
+/// Unpacks the values from the packed representation
 #[inline(always)]
 fn unpack_values_simd<const N: usize>(packed: Simd<u64, N>) -> Simd<u64, N>
 where
@@ -98,12 +114,16 @@ where
     packed & Simd::splat(0xFFFF)
 }
 
+/// Enum used to distinguish between owned and borrowed RoaringishPacked.
+/// Mainly used at the end of the indexing phase when we merge all of the
+/// batches together.
 pub enum RoaringishPackedKind<'a, A> {
     Owned(RoaringishPacked),
     Archived(&'a ArchivedBorrowRoaringishPacked<'a, A>),
 }
 
 impl<'a, A> RoaringishPackedKind<'a, A> {
+    /// Bytes of the Roaringish Packed
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             RoaringishPackedKind::Owned(packed) => unsafe {
@@ -121,6 +141,7 @@ impl<'a, A> RoaringishPackedKind<'a, A> {
         }
     }
 
+    /// Concatenates two Roaringish Packed together
     pub fn concat<'b: 'a>(self, other: RoaringishPackedKind<'b, A>) -> RoaringishPackedKind<'b, A> {
         unsafe fn copy_data<T, U>(dest: &mut [MaybeUninit<T>], lhs: &[U], rhs: &[U]) {
             let (l, buf, r) = dest.align_to_mut::<MaybeUninit<u8>>();
@@ -161,6 +182,20 @@ impl<'a, A> RoaringishPackedKind<'a, A> {
     }
 }
 
+/// Main data structure used for phrase search.
+/// In here we store a compact representation of the
+/// document IDs and positions.
+/// 
+/// The representation should be in the form:
+/// ```
+/// document ID | group   | values
+///   32 bits   | 16 bits | 16 bits
+/// ```
+/// 
+/// So the packed fits into 64 bits.
+/// 
+/// The data structure should be ordered by the 
+/// document ID and group.
 #[derive(PartialEq, Eq, Debug, Serialize, Archive)]
 #[repr(transparent)]
 pub struct RoaringishPacked(Vec<u64, Aligned64>);
@@ -174,11 +209,14 @@ impl Deref for RoaringishPacked {
 }
 
 impl RoaringishPacked {
+    /// Size occupied in bytes
     pub fn size_bytes(&self) -> usize {
         self.len() * std::mem::size_of::<u64>()
     }
 
-    pub(crate) fn push(&mut self, doc_id: u32, pos: &[u32]) {
+    /// Adds a document with id `doc_id` and positions `pos`
+    /// to the Roaringish Packed.
+    pub fn push(&mut self, doc_id: u32, pos: &[u32]) {
         let packed_doc_id = pack_doc_id(doc_id);
 
         let mut it = pos.iter().copied();
@@ -221,11 +259,16 @@ impl Default for RoaringishPacked {
     }
 }
 
+/// Type used to mark when the Roaringish Packed is aligned to 64 bytes
 #[derive(Clone, Copy, Debug)]
 pub struct Aligned;
+
+/// Type used to mark when the Roaringish Packed is unaligned
 #[derive(Clone, Copy, Debug)]
 pub struct Unaligned;
 
+/// Borrow version of the Roaringish Packed. Maily used to
+/// interop with the Roaringish Packed retrieved from the DB.
 #[derive(Clone, Copy, Debug, Serialize, Archive)]
 pub struct BorrowRoaringishPacked<'a, A>(#[rkyv(with = InlineAsBox)] &'a [u64], PhantomData<A>);
 
@@ -238,18 +281,24 @@ impl<A> Deref for BorrowRoaringishPacked<'_, A> {
 }
 
 impl<'a> BorrowRoaringishPacked<'a, Aligned> {
+    /// Creates a new Roaringish Packed from
+    /// the packed representation.
+    /// 
+    /// Checks if it's aligned to 64 bytes.
     pub fn new_raw(packed: &'a [u64]) -> Self {
         assert!(packed.as_ptr().is_aligned_to(64));
         Self(packed, PhantomData)
     }
 
+    /// Creates a new Roaringish Packed from
+    /// the packed representation.
     #[allow(clippy::ptr_arg)]
     pub fn new(packed: &'a Vec<u64, Aligned64>) -> Self {
         Self(packed, PhantomData)
     }
 
     #[inline(never)]
-    pub fn intersect<I: Intersect>(
+    pub fn intersect<I: Intersection>(
         self,
         mut rhs: Self,
         lhs_len: u32,
@@ -294,24 +343,6 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
                 }
                 std::cmp::Ordering::Equal => {}
             }
-
-            // skip the ending of the slice
-            // let last_lhs = clear_values(*lhs.0.last().unwrap());
-            // let last_rhs = clear_values(*rhs.0.last().unwrap());
-
-            // if last_lhs < last_rhs {
-            //     let i = match rhs.0.binary_search_by_key(&last_lhs, |p| clear_values(*p)) {
-            //         Ok(i) => i + 1,
-            //         Err(i) => i,
-            //     } + 1;
-            //     *rhs = BorrowRoaringishPacked::new_raw(&rhs.0[..i]);
-            // } else if last_lhs > last_rhs {
-            //     let i = match lhs.0.binary_search_by_key(&last_rhs, |p| clear_values(*p)) {
-            //         Ok(i) => i + 1,
-            //         Err(i) => i,
-            //     } + 1;
-            //     *lhs = BorrowRoaringishPacked::new_raw(&lhs.0[..i]);
-            // }
         }
 
         let mut lhs = self;
@@ -374,8 +405,10 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         Self::merge_results(packed, msb_packed, stats)
     }
 
-    // This function neeeds to be inline always, for some reason not inlining this
-    // function makes some queries performance unpredictable
+    /// Merges the results of the first and second phase of the intersection.
+    /// 
+    /// This function neeeds to be inline always, for some reason not inlining this
+    /// function makes some queries performance unpredictable
     #[inline(always)]
     fn merge_results(
         packed: Vec<u64, Aligned64>,
@@ -387,11 +420,14 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
         let mut r_packed = Box::new_uninit_slice_in(capacity, Aligned64::default());
         let mut r_i = 0;
         let mut j = 0;
+        // let's use the fact the the first element in `packed` is smaller or
+        // equal to the first element in `msb_packed`
         for pack in packed.iter().copied() {
             unsafe {
                 let doc_id_group = clear_values(pack);
                 let values = unpack_values(pack);
 
+                // write from the `until it's smaller than the current doc_id_group`
                 while j < msb_packed.len() {
                     let msb_pack = *msb_packed.get_unchecked(j);
                     let msb_doc_id_group = clear_values(msb_pack);
@@ -409,42 +445,47 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
                     }
                 }
 
+                // check to avoid writing elements where their values are 0
                 let write = values > 0;
                 if write {
                     r_packed.get_unchecked_mut(r_i).write(pack);
                     r_i += 1;
                 }
 
-                {
-                    if j >= msb_packed.len() {
-                        continue;
-                    }
+                // avoids out of bounds read
+                if j >= msb_packed.len() {
+                    continue;
+                }
 
-                    let msb_pack = *msb_packed.get_unchecked(j);
-                    let msb_doc_id_group = clear_values(msb_pack);
-                    let msb_values = unpack_values(msb_pack);
-                    j += 1;
-                    if msb_doc_id_group != doc_id_group {
-                        j -= 1;
-                        continue;
-                    }
+                // write the element from `msb_packed` that made the loop break
+                // only if it's equal to the current `doc_id_group`
+                let msb_pack = *msb_packed.get_unchecked(j);
+                let msb_doc_id_group = clear_values(msb_pack);
+                let msb_values = unpack_values(msb_pack);
+                j += 1;
+                if msb_doc_id_group != doc_id_group {
+                    j -= 1;
+                    continue;
+                }
 
-                    if write {
-                        // in this case no bit was set in the intersection,
-                        // so we can just `or` the new value with the previous one
-                        let r = r_packed.get_unchecked_mut(r_i - 1).assume_init_mut();
-                        *r |= msb_values as u64;
-                    } else if msb_values > 0 {
-                        r_packed.get_unchecked_mut(r_i).write(msb_pack);
-                        r_i += 1;
-                    }
+                if write {
+                    // in this case at least one bit was set in the intersection,
+                    // so we can just `or` the new value with the previous one
+                    let r = r_packed.get_unchecked_mut(r_i - 1).assume_init_mut();
+                    *r |= msb_values as u64;
+                } else if msb_values > 0 {
+                    // in this case no bit was set in the intersection,
+                    // so write as if it was new
+                    r_packed.get_unchecked_mut(r_i).write(msb_pack);
+                    r_i += 1;
                 }
             }
         }
         stats
-            .first_result
+            .merge_phases_first_pass
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
+        // finish the rest of the elements in `msb_packed`
         let b = std::time::Instant::now();
         for msb_pack in msb_packed.iter().skip(j).copied() {
             unsafe {
@@ -456,7 +497,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
             }
         }
         stats
-            .second_result
+            .merge_phases_second_pass
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         unsafe {
@@ -468,6 +509,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
 }
 
 impl<A> BorrowRoaringishPacked<'_, A> {
+    /// Gets the distinct document IDs from the Roaringish Packed.
     #[cfg(not(target_feature = "avx512f"))]
     #[inline(always)]
     pub fn get_doc_ids(&self, stats: &Stats) -> Vec<u32> {
@@ -507,6 +549,7 @@ impl<A> BorrowRoaringishPacked<'_, A> {
         unsafe { Vec::from_raw_parts(Box::into_raw(doc_ids) as *mut _, i, self.0.len()) }
     }
 
+    /// Gets the distinct document IDs from the Roaringish Packed.
     #[cfg(target_feature = "avx512f")]
     #[inline(always)]
     pub fn get_doc_ids(&self, stats: &Stats) -> Vec<u32> {
@@ -612,56 +655,6 @@ impl<A> Binary for BorrowRoaringishPacked<'_, A> {
         list.finish()
     }
 }
-
-// impl Debug for AlignedRoaringishPacked {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let mut list = f.debug_list();
-//         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
-//             list.entry_with(|f| {
-//                 let doc_id = get_doc_id(*doc_id_group);
-//                 let group = get_group_from_doc_id_group(*doc_id_group);
-//                 f.debug_tuple("")
-//                     .field(&doc_id)
-//                     .field(&group)
-//                     .field_with(|f| {
-//                         f.debug_list()
-//                             .entries(
-//                                 (0..16u32)
-//                                     .filter_map(|i| ((encoded_values >> i) & 1 == 1).then_some(i)),
-//                             )
-//                             .finish()
-//                     })
-//                     .finish()
-//             });
-//         }
-//         list.finish()
-//     }
-// }
-
-// impl<'a> Debug for AlignedBorrowRoaringishPacked<'a> {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let mut list = f.debug_list();
-//         for (doc_id_group, encoded_values) in self.doc_id_groups.iter().zip(self.values.iter()) {
-//             list.entry_with(|f| {
-//                 let doc_id = get_doc_id(*doc_id_group);
-//                 let group = get_group_from_doc_id_group(*doc_id_group);
-//                 f.debug_tuple("")
-//                     .field(&doc_id)
-//                     .field(&group)
-//                     .field_with(|f| {
-//                         f.debug_list()
-//                             .entries(
-//                                 (0..16u32)
-//                                     .filter_map(|i| ((encoded_values >> i) & 1 == 1).then_some(i)),
-//                             )
-//                             .finish()
-//                     })
-//                     .finish()
-//             });
-//         }
-//         list.finish()
-//     }
-// }
 
 impl Display for RoaringishPacked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

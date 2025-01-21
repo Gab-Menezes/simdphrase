@@ -25,26 +25,23 @@ mod indexer;
 mod roaringish;
 mod searcher;
 mod utils;
+mod error;
+mod stats;
 
-pub use db::{Stats, DB};
+use utils::{normalize, tokenize};
+use roaringish::BorrowRoaringishPacked;
+use allocator::Aligned64;
+use db::DB;
+use roaringish::RoaringishPacked;
+
+pub use stats::Stats;
+pub use error::{DbError, SearchError};
 pub use indexer::CommonTokens;
 pub use indexer::Indexer;
 
-pub use roaringish::intersect::gallop_first;
-pub use roaringish::intersect::naive;
+pub use roaringish::intersect::naive::NaiveIntersect;
 
-// #[cfg(all(
-//     target_feature = "avx512f",
-//     target_feature = "avx512bw",
-//     target_feature = "avx512vl",
-//     target_feature = "avx512vbmi2",
-//     target_feature = "avx512dq",
-// ))]
-pub use roaringish::intersect::simd;
-
-pub use allocator::Aligned64;
-pub use roaringish::intersect::Intersect;
-pub use roaringish::BorrowRoaringishPacked;
-pub use roaringish::RoaringishPacked;
-pub use searcher::Searcher;
-pub use utils::{normalize, tokenize};
+#[cfg(target_feature = "avx512f")]
+pub use roaringish::intersect::simd::SimdIntersect;
+pub use roaringish::intersect::Intersection;
+pub use searcher::{Searcher, SearchResult};

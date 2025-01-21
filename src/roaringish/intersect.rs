@@ -15,7 +15,17 @@ mod private {
     pub trait IntersectSeal {}
 }
 
+/// Allows a type to be used as an intersection algorithm when searching.
+pub trait Intersection: Intersect {}
+
+/// Necessary functions for an intersection algorithm.
+/// 
+/// The intersection is done in two phases that's why
+/// the function have a `FIRST` const generic.
 pub trait Intersect: private::IntersectSeal {
+    /// Responsible for allocating the result buffers
+    /// and compute the necessary values before starting
+    /// the intersection.
     #[inline(never)]
     fn intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
@@ -76,6 +86,9 @@ pub trait Intersect: private::IntersectSeal {
         }
     }
 
+    /// Performs the intersection.
+    /// 
+    /// `msb_packed_result` has 0 capacity if `FIRST` is false.
     #[allow(clippy::too_many_arguments)]
     fn inner_intersect<const FIRST: bool>(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
@@ -98,6 +111,7 @@ pub trait Intersect: private::IntersectSeal {
         stats: &Stats,
     );
 
+    /// Size of the buffer needed to store the intersection.
     fn intersection_buffer_size(
         lhs: BorrowRoaringishPacked<'_, Aligned>,
         rhs: BorrowRoaringishPacked<'_, Aligned>,

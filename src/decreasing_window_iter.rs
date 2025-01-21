@@ -1,12 +1,12 @@
 use std::{iter::FusedIterator, num::NonZero};
 
-pub(crate) struct DecreasingWindows<'a, T: 'a> {
+pub struct DecreasingWindows<'a, T: 'a> {
     v: &'a [T],
     size: NonZero<usize>,
 }
 impl<'a, T: 'a> DecreasingWindows<'a, T> {
     #[inline]
-    pub(crate) fn new(slice: &'a [T], size: NonZero<usize>) -> Self {
+    pub fn new(slice: &'a [T], size: NonZero<usize>) -> Self {
         Self { v: slice, size }
     }
 }

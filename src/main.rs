@@ -11,7 +11,7 @@
 // use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use core::str;
-use phrase_search::{simd::SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
+use phrase_search::{SimdIntersect, CommonTokens, Indexer, Searcher, Stats};
 use rkyv::{
     api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
 };
@@ -87,108 +87,26 @@ where
     let queries = std::fs::read_to_string(args.queries).unwrap();
     let queries: Vec<_> = queries.lines().collect();
     for q in queries.iter() {
-        let stats = Stats::default();
         for _ in 0..20 {
-            let doc_ids = searcher.search::<Intersect>(q, &stats);
+            let doc_ids = searcher.search::<Intersect>(q);
             std::hint::black_box(doc_ids);
         }
 
         let stats = Stats::default();
         let b = std::time::Instant::now();
         for _ in 0..args.runs {
-            // Command::new("/bin/bash")
-            //     .arg("./clear_cache.sh")
-            //     .stdout(Stdio::null())
-            //     .status()
-            //     .unwrap();
 
-            let doc_ids = searcher.search::<Intersect>(q, &stats);
+            let doc_ids = searcher.search_with_stats::<Intersect>(q, &stats);
             std::hint::black_box(doc_ids);
         }
         let e = b.elapsed().as_micros();
         let avg_ms = e as f64 / args.runs as f64 / 1000_f64;
-
-        let stats_ = Stats::default();
-        let n_found = searcher.search::<Intersect>(q, &stats_).len();
+        let n_found = searcher.search::<Intersect>(q).len();
 
         println!("query: {q:?} took {avg_ms:.4} ms/iter ({n_found} results found)");
         println!("{stats:#?}");
     }
 }
-
-// fn index_text(args: IndexFolder) {
-//     println!("Start Indexing");
-
-//     let files: Vec<_> = std::fs::read_dir(&args.folder)
-//         .unwrap()
-//         .map(|file| file.unwrap().path())
-//         .collect();
-
-//     println!();
-//     println!("Files to Index: {files:#?}");
-//     println!();
-
-//     let docs: Vec<_> = files
-//         .into_iter()
-//         .map(|file| {
-//             let content = std::fs::read_to_string(&file).unwrap();
-//             (content, file.to_str().unwrap().to_owned())
-//         })
-//         .collect();
-
-//     let b = std::time::Instant::now();
-
-//     // let mut indexer = Indexer::new(&args.index_name, args.db_size, None, None, None);
-//     let mut indexer = Indexer::new(&args.index_name, args.db_size, None, None, None);
-//     let num_docs = indexer.index(docs);
-//     indexer.flush();
-
-//     println!(
-//         "Whole Indexing took {:?} ({num_docs} documents)",
-//         b.elapsed()
-//     );
-// }
-
-// fn index_parquet(args: IndexFolder) {
-//     println!("Start Indexing");
-
-//     let files: Vec<_> = std::fs::read_dir(&args.folder)
-//         .unwrap()
-//         .map(|file| file.unwrap().path())
-//         .collect();
-
-//     let mut docs = Vec::new();
-//     for file in files.iter() {
-//         let file = File::open(file).unwrap();
-//         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-
-//         let reader = builder.build().unwrap();
-
-//         for record_batch in reader {
-//             let record_batch = record_batch.unwrap();
-//             let query_id = record_batch.column(3);
-//             let query_id = query_id.as_any().downcast_ref::<Int32Array>().unwrap();
-//             let queries = record_batch.column(2);
-//             let queries = queries.as_any().downcast_ref::<StringArray>().unwrap();
-//             for (query_id, query) in query_id.iter().zip(queries.iter()) {
-//                 docs.push((query.unwrap().to_owned(), query_id.unwrap()));
-//             }
-//         }
-//     }
-
-//     println!();
-//     println!("Files to Index: {files:#?} ({} documents)", docs.len());
-//     println!();
-
-//     let b = std::time::Instant::now();
-//     let next_doc_id = AtomicU32::new(0);
-
-//     let db = DB::truncate(&args.index_name, args.db_size);
-//     let indexer = db.indexer(&next_doc_id);
-//     indexer.index(docs);
-
-//     println!("Whole Indexing took {:?}", b.elapsed());
-// }
 
 fn index_msmarco(args: IndexFile) {
     println!("Start Indexing");
@@ -204,7 +122,7 @@ fn index_msmarco(args: IndexFile) {
 
     let b = std::time::Instant::now();
     let indexer = Indexer::new(Some(30000), Some(CommonTokens::FixedNum(50)));
-    let num_docs = indexer.index(it, &args.index_name, args.db_size);
+    let num_docs = indexer.index(it, &args.index_name, args.db_size).unwrap();
     println!(
         "Whole Indexing took {:?} ({num_docs} documents)",
         b.elapsed()

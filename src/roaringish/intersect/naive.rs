@@ -6,10 +6,12 @@ use crate::{
     Stats,
 };
 
-use super::{private::IntersectSeal, Intersect};
+use super::{private::IntersectSeal, Intersect, Intersection};
 
+/// Naive intersection algorithm.
 pub struct NaiveIntersect;
 impl IntersectSeal for NaiveIntersect {}
+impl Intersection for NaiveIntersect {}
 
 impl Intersect for NaiveIntersect {
     #[inline(always)]

@@ -20,7 +20,7 @@ use crate::{
     Stats,
 };
 
-use super::naive::NaiveIntersect;
+use super::{naive::NaiveIntersect, Intersection};
 use super::{private::IntersectSeal, Intersect};
 use crate::roaringish::Aligned;
 
@@ -109,8 +109,10 @@ fn rotl_u16(a: Simd<u64, N>, i: u64) -> Simd<u64, N> {
     p0 | p1
 }
 
+/// SIMD version of the intersection algorithm using AVX-512.
 pub struct SimdIntersect;
 impl IntersectSeal for SimdIntersect {}
+impl Intersection for SimdIntersect {}
 
 impl Intersect for SimdIntersect {
     #[inline(always)]

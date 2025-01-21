@@ -23,17 +23,14 @@ use std::{
     num::NonZero,
     ops::Index,
     path::Path,
-    sync::atomic::{AtomicU64, Ordering::Relaxed},
+    sync::atomic::Ordering::Relaxed,
 };
 
 use crate::{
-    codecs::{NativeU32, ZeroCopyCodec},
-    normalize,
-    roaringish::{
-        intersect::Intersect, Aligned, ArchivedBorrowRoaringishPacked, RoaringishPackedKind,
+    codecs::{NativeU32, ZeroCopyCodec}, error::{DbError, SearchError}, normalize, roaringish::{
+        Aligned, ArchivedBorrowRoaringishPacked, RoaringishPackedKind,
         Unaligned,
-    },
-    tokenize, BorrowRoaringishPacked, RoaringishPacked,
+    }, stats::Stats, tokenize, BorrowRoaringishPacked, Intersection, RoaringishPacked
 };
 
 struct Tokens {
@@ -98,10 +95,9 @@ impl RefTokens<'_> {
     }
 
     fn ref_token_iter(&self) -> impl Iterator<Item = Self> + '_ {
-        (0..self.positions.len())
-        .map(|i| Self {
+        (0..self.positions.len()).map(|i| Self {
             tokens: self.tokens,
-            positions: &self.positions[i..i+1]
+            positions: &self.positions[i..i + 1],
         })
     }
 
@@ -211,195 +207,6 @@ mod db_constants {
 
 pub const MAX_WINDOW_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
 
-#[derive(Default)]
-pub struct Stats {
-    pub normalize_tokenize: AtomicU64,
-    pub merge: AtomicU64,
-    pub first_binary_search: AtomicU64,
-    pub first_intersect: AtomicU64,
-    pub first_intersect_simd: AtomicU64,
-    pub first_intersect_naive: AtomicU64,
-    pub first_intersect_gallop: AtomicU64,
-
-    pub second_binary_search: AtomicU64,
-    pub second_intersect: AtomicU64,
-    pub second_intersect_simd: AtomicU64,
-    pub second_intersect_naive: AtomicU64,
-    pub second_intersect_gallop: AtomicU64,
-
-    pub first_result: AtomicU64,
-    pub second_result: AtomicU64,
-
-    pub get_doc_ids: AtomicU64,
-
-    pub iters: AtomicU64,
-}
-
-impl Debug for Stats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sum = self.normalize_tokenize.load(Relaxed)
-            + self.merge.load(Relaxed)
-            + self.first_binary_search.load(Relaxed)
-            + self.first_intersect.load(Relaxed)
-            + self.second_binary_search.load(Relaxed)
-            + self.second_intersect.load(Relaxed)
-            + self.first_result.load(Relaxed)
-            + self.second_result.load(Relaxed)
-            + self.get_doc_ids.load(Relaxed);
-        let sum = sum as f64;
-
-        let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64;
-        let merge = self.merge.load(Relaxed) as f64;
-        let first_binary_search = self.first_binary_search.load(Relaxed) as f64;
-        let first_intersect = self.first_intersect.load(Relaxed) as f64;
-        let first_intersect_simd = self.first_intersect_simd.load(Relaxed) as f64;
-        let first_intersect_naive = self.first_intersect_naive.load(Relaxed) as f64;
-        let first_intersect_gallop = self.first_intersect_gallop.load(Relaxed) as f64;
-        let second_binary_search = self.second_binary_search.load(Relaxed) as f64;
-        let second_intersect = self.second_intersect.load(Relaxed) as f64;
-        let second_intersect_simd = self.second_intersect_simd.load(Relaxed) as f64;
-        let second_intersect_naive = self.second_intersect_naive.load(Relaxed) as f64;
-        let second_intersect_gallop = self.second_intersect_gallop.load(Relaxed) as f64;
-        let first_result = self.first_result.load(Relaxed) as f64;
-        let second_result = self.second_result.load(Relaxed) as f64;
-        let get_doc_ids = self.get_doc_ids.load(Relaxed) as f64;
-        let iters = self.iters.load(Relaxed) as f64;
-
-        let per_normalize_tokenize = normalize_tokenize / sum * 100f64;
-        let per_merge = merge / sum * 100f64;
-        let per_first_binary_search = first_binary_search / sum * 100f64;
-        let per_first_intersect = first_intersect / sum * 100f64;
-        let per_second_binary_search = second_binary_search / sum * 100f64;
-        let per_second_intersect = second_intersect / sum * 100f64;
-        let per_first_result = first_result / sum * 100f64;
-        let per_second_result = second_result / sum * 100f64;
-        let per_get_doc_ids = get_doc_ids / sum * 100f64;
-
-        f.debug_struct("Stats")
-            .field(
-                "normalize_tokenize",
-                &format_args!(
-                    "        ({:08.3}ms, {:08.3}us/iter, {per_normalize_tokenize:06.3}%)",
-                    normalize_tokenize / 1000f64,
-                    normalize_tokenize / iters,
-                ),
-            )
-            .field(
-                "merge",
-                &format_args!(
-                    "                     ({:08.3}ms, {:08.3}us/iter, {per_merge:06.3}%)",
-                    merge / 1000f64,
-                    merge / iters,
-                ),
-            )
-            .field(
-                "first_binary_search",
-                &format_args!(
-                    "       ({:08.3}ms, {:08.3}us/iter, {per_first_binary_search:06.3}%)",
-                    first_binary_search / 1000f64,
-                    first_binary_search / iters,
-                ),
-            )
-            .field(
-                "first_intersect",
-                &format_args!(
-                    "           ({:08.3}ms, {:08.3}us/iter, {per_first_intersect:06.3}%)",
-                    first_intersect / 1000f64,
-                    first_intersect / iters,
-                ),
-            )
-            .field(
-                "    first_intersect_simd",
-                &format_args!(
-                    "      ({:08.3}ms, {:08.3}us/iter)",
-                    first_intersect_simd / 1000f64,
-                    first_intersect_simd / iters,
-                ),
-            )
-            .field(
-                "    first_intersect_naive",
-                &format_args!(
-                    "     ({:08.3}ms, {:08.3}us/iter)",
-                    first_intersect_naive / 1000f64,
-                    first_intersect_naive / iters,
-                ),
-            )
-            .field(
-                "    first_intersect_gallop",
-                &format_args!(
-                    "    ({:08.3}ms, {:08.3}us/iter)",
-                    first_intersect_gallop / 1000f64,
-                    first_intersect_gallop / iters,
-                ),
-            )
-            .field(
-                "second_binary_search",
-                &format_args!(
-                    "      ({:08.3}ms, {:08.3}us/iter, {per_second_binary_search:06.3}%)",
-                    second_binary_search / 1000f64,
-                    second_binary_search / iters,
-                ),
-            )
-            .field(
-                "second_intersect",
-                &format_args!(
-                    "          ({:08.3}ms, {:08.3}us/iter, {per_second_intersect:06.3}%)",
-                    second_intersect / 1000f64,
-                    second_intersect / iters,
-                ),
-            )
-            .field(
-                "    second_intersect_simd",
-                &format_args!(
-                    "     ({:08.3}ms, {:08.3}us/iter)",
-                    second_intersect_simd / 1000f64,
-                    second_intersect_simd / iters,
-                ),
-            )
-            .field(
-                "    second_intersect_naive",
-                &format_args!(
-                    "    ({:08.3}ms, {:08.3}us/iter)",
-                    second_intersect_naive / 1000f64,
-                    second_intersect_naive / iters,
-                ),
-            )
-            .field(
-                "    second_intersect_gallop",
-                &format_args!(
-                    "   ({:08.3}ms, {:08.3}us/iter)",
-                    second_intersect_gallop / 1000f64,
-                    second_intersect_gallop / iters,
-                ),
-            )
-            .field(
-                "first_result",
-                &format_args!(
-                    "              ({:08.3}ms, {:08.3}us/iter, {per_first_result:06.3}%)",
-                    first_result / 1000f64,
-                    first_result / iters,
-                ),
-            )
-            .field(
-                "second_result",
-                &format_args!(
-                    "             ({:08.3}ms, {:08.3}us/iter, {per_second_result:06.3}%)",
-                    second_result / 1000f64,
-                    second_result / iters,
-                ),
-            )
-            .field(
-                "get_doc_ids",
-                &format_args!(
-                    "               ({:08.3}ms, {:08.3}us/iter, {per_get_doc_ids:06.3}%)",
-                    get_doc_ids / 1000f64,
-                    get_doc_ids / iters,
-                ),
-            )
-            .finish()
-    }
-}
-
 #[derive(Debug, Serialize, Archive)]
 struct Offset {
     begin: u64,
@@ -411,7 +218,7 @@ where
     D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
         + Archive,
 {
-    pub(crate) env: Env,
+    pub env: Env,
     db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
     db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
@@ -437,65 +244,62 @@ where
         + Archive
         + 'static,
 {
-    pub fn truncate(path: &Path, db_size: usize) -> Self {
-        let _ = std::fs::remove_dir_all(path);
-        std::fs::create_dir_all(path).unwrap();
+    pub fn truncate(path: &Path, db_size: usize) -> Result<Self, DbError> {
+        std::fs::remove_dir_all(path)?;
+        std::fs::create_dir_all(path)?;
 
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)
                 .map_size(db_size)
                 .flags(EnvFlags::WRITE_MAP | EnvFlags::MAP_ASYNC)
-                .open(path)
-                .unwrap()
+                .open(path)?
         };
 
-        let mut wrtxn = env.write_txn().unwrap();
+        let mut wrtxn = env.write_txn()?;
 
-        let db_main = env.create_database(&mut wrtxn, None).unwrap();
+        let db_main = env.create_database(&mut wrtxn, None)?;
 
         let db_doc_id_to_document = env
             .database_options()
             .types::<NativeU32, ZeroCopyCodec<D>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name(db_constants::DB_DOC_ID_TO_DOCUMENT)
-            .create(&mut wrtxn)
-            .unwrap();
+            .create(&mut wrtxn)?;
 
-        let db_token_to_offsets = env
-            .create_database(&mut wrtxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))
-            .unwrap();
+        let db_token_to_offsets =
+            env.create_database(&mut wrtxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))?;
 
-        wrtxn.commit().unwrap();
+        wrtxn.commit()?;
 
-        Self {
+        Ok(Self {
             env,
             db_main,
             db_doc_id_to_document,
             db_token_to_offsets,
-        }
+        })
     }
 
-    pub(crate) fn write_doc_id_to_document(
+    pub fn write_doc_id_to_document(
         &self,
         rwtxn: &mut RwTxn,
         doc_ids: &[u32],
         documents: &[D],
-    ) {
+    ) -> Result<(), DbError> {
         for (doc_id, document) in doc_ids.iter().zip(documents.iter()) {
             self.db_doc_id_to_document
-                .put_with_flags(rwtxn, PutFlags::APPEND, doc_id, document)
-                .unwrap();
+                .put_with_flags(rwtxn, PutFlags::APPEND, doc_id, document)?;
         }
+        Ok(())
     }
 
-    pub(crate) fn write_token_to_roaringish_packed(
+    pub fn write_token_to_roaringish_packed(
         &self,
         token_to_token_id: &GxHashMap<Box<str>, u32>,
         token_id_to_roaringish_packed: &[RoaringishPacked],
         mmap_size: &mut usize,
         batch_id: u32,
-    ) {
+    ) -> Result<(), DbError> {
         let mut token_to_packed: Vec<_> = token_to_token_id
             .iter()
             .map(|(token, token_id)| {
@@ -513,19 +317,19 @@ where
                 .truncate(true)
                 .read(true)
                 .write(true)
-                .open(self.env.path().join(file_name))
-                .unwrap(),
+                .open(self.env.path().join(file_name))?,
         ));
-        rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&token_to_packed, file).unwrap();
+        rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&token_to_packed, file)?;
+        Ok(())
     }
 
-    pub(crate) fn generate_mmap_file(
+    pub fn generate_mmap_file(
         &self,
         number_of_distinct_tokens: u64,
         mmap_size: usize,
         number_of_batches: u32,
         rwtxn: &mut RwTxn,
-    ) {
+    ) -> Result<(), DbError> {
         #[inline(always)]
         unsafe fn write_to_mmap<const N: usize>(
             mmap: &mut MmapMut,
@@ -551,24 +355,21 @@ where
             .truncate(true)
             .read(true)
             .write(true)
-            .open(self.env.path().join(db_constants::FILE_ROARINGISH_PACKED))
-            .unwrap();
-        file.set_len(mmap_size as u64 + (number_of_distinct_tokens * 64))
-            .unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+            .open(self.env.path().join(db_constants::FILE_ROARINGISH_PACKED))?;
+        file.set_len(mmap_size as u64 + (number_of_distinct_tokens * 64))?;
+        let mut mmap = unsafe { MmapMut::map_mut(&file)? };
         let mut mmap_offset = 0;
 
         // we need to do this in 3 steps because of the borrow checker
-        let files_mmaps: Vec<_> = (0..number_of_batches)
-            .map(|i| {
+        let files_mmaps = (0..number_of_batches)
+            .map(|i| -> Result<Mmap, DbError> {
                 let file_name = format!("{}_{i}", db_constants::TEMP_FILE_TOKEN_TO_PACKED);
                 let file = File::options()
                     .read(true)
-                    .open(self.env.path().join(file_name))
-                    .unwrap();
-                unsafe { Mmap::map(&file).unwrap() }
+                    .open(self.env.path().join(file_name))?;
+                unsafe { Ok(Mmap::map(&file)?) }
             })
-            .collect();
+            .collect::<Result<Vec<_>, DbError>>()?;
         let files_data: Vec<_> = files_mmaps
             .iter()
             .map(|mmap| unsafe {
@@ -638,6 +439,7 @@ where
                     break;
                 }
 
+                // This pop can't fail because we peeked before
                 let next_to_merge = heap.pop().unwrap().0;
                 if let Some(token_to_packed) = iters[next_to_merge.i].next() {
                     heap.push(Reverse(ToMerge {
@@ -657,9 +459,12 @@ where
 
             let packed = packed_kind.as_bytes();
             let offset = unsafe { write_to_mmap::<64>(&mut mmap, &mut mmap_offset, packed) };
-            self.db_token_to_offsets
-                .put_with_flags(rwtxn, PutFlags::APPEND, &to_merge.token.0, &offset)
-                .unwrap();
+            self.db_token_to_offsets.put_with_flags(
+                rwtxn,
+                PutFlags::APPEND,
+                &to_merge.token.0,
+                &offset,
+            )?;
         }
 
         drop(iters);
@@ -668,66 +473,77 @@ where
 
         for i in 0..number_of_batches {
             let file_name = format!("{}_{i}", db_constants::TEMP_FILE_TOKEN_TO_PACKED);
-            std::fs::remove_file(self.env.path().join(file_name)).unwrap();
+            std::fs::remove_file(self.env.path().join(file_name))?;
         }
+
+        Ok(())
     }
 
     fn read_common_tokens(
         rotxn: &RoTxn,
         db_main: Database<Unspecified, Unspecified>,
-    ) -> HashSet<Box<str>> {
+    ) -> Result<HashSet<Box<str>>, DbError> {
         let k = db_main
             .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
-            .get(rotxn, db_constants::KEY_COMMON_TOKENS)
-            .unwrap()
-            .unwrap();
+            .get(rotxn, db_constants::KEY_COMMON_TOKENS)?
+            .ok_or_else(|| {
+                DbError::KeyNotFound(
+                    db_constants::KEY_COMMON_TOKENS.to_string(),
+                    "main".to_string(),
+                )
+            })?;
 
-        deserialize::<_, rkyv::rancor::Error>(k).unwrap()
+        Ok(deserialize::<_, rkyv::rancor::Error>(k)?)
     }
 
-    pub(crate) fn write_common_tokens(&self, rwtxn: &mut RwTxn, common_tokens: &HashSet<Box<str>>) {
+    pub fn write_common_tokens(
+        &self,
+        rwtxn: &mut RwTxn,
+        common_tokens: &HashSet<Box<str>>,
+    ) -> Result<(), DbError> {
         self.db_main
             .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
-            .put(rwtxn, db_constants::KEY_COMMON_TOKENS, common_tokens)
-            .unwrap();
+            .put(rwtxn, db_constants::KEY_COMMON_TOKENS, common_tokens)?;
+        Ok(())
     }
 
-    pub fn open(path: &Path, db_size: usize) -> (Self, HashSet<Box<str>>, Mmap) {
+    pub fn open(path: &Path, db_size: usize) -> Result<(Self, HashSet<Box<str>>, Mmap), DbError> {
         let env = unsafe {
             EnvOpenOptions::new()
                 .max_dbs(2)
                 .map_size(db_size)
                 .flags(EnvFlags::READ_ONLY)
-                .open(path)
-                .unwrap()
+                .open(path)?
         };
 
-        let rotxn = env.read_txn().unwrap();
+        let rotxn = env.read_txn()?;
 
-        let db_main = env.open_database(&rotxn, None).unwrap().unwrap();
+        let db_main = env
+            .open_database(&rotxn, None)?
+            .ok_or_else(|| DbError::DatabaseError("main".to_string()))?;
 
         let db_doc_id_to_document = env
             .database_options()
             .types::<NativeU32, ZeroCopyCodec<D>>()
             .flags(DatabaseFlags::REVERSE_KEY)
             .name(db_constants::DB_DOC_ID_TO_DOCUMENT)
-            .open(&rotxn)
-            .unwrap()
-            .unwrap();
+            .open(&rotxn)?
+            .ok_or_else(|| {
+                DbError::DatabaseError(db_constants::DB_DOC_ID_TO_DOCUMENT.to_string())
+            })?;
 
         let db_token_to_offsets = env
-            .open_database(&rotxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))
-            .unwrap()
-            .unwrap();
+            .open_database(&rotxn, Some(db_constants::DB_TOKEN_TO_OFFSETS))?
+            .ok_or_else(|| DbError::DatabaseError(db_constants::DB_TOKEN_TO_OFFSETS.to_string()))?;
 
-        let common_tokens = Self::read_common_tokens(&rotxn, db_main);
+        let common_tokens = Self::read_common_tokens(&rotxn, db_main)?;
 
-        rotxn.commit().unwrap();
+        rotxn.commit()?;
 
-        let mmap_file = File::open(path.join(db_constants::FILE_ROARINGISH_PACKED)).unwrap();
-        let mmap = unsafe { Mmap::map(&mmap_file).unwrap() };
+        let mmap_file = File::open(path.join(db_constants::FILE_ROARINGISH_PACKED))?;
+        let mmap = unsafe { Mmap::map(&mmap_file)? };
 
-        (
+        Ok((
             Self {
                 env,
                 db_main,
@@ -736,7 +552,7 @@ where
             },
             common_tokens,
             mmap,
-        )
+        ))
     }
 
     // This function neeeds to be inline never, for some reason inlining this
@@ -750,10 +566,13 @@ where
         mmap: &'b Mmap,
 
         bump: &'alloc Bump,
-    ) -> (
-        Vec<RefTokens<'a>>,
-        GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
-    ) {
+    ) -> Result<
+        (
+            Vec<RefTokens<'a>>,
+            GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+        ),
+        SearchError,
+    > {
         #[inline(always)]
         fn check_before_recursion<'a, 'b, 'alloc, D>(
             me: &DB<D>,
@@ -766,31 +585,29 @@ where
                 (usize, &'alloc RefTokenLinkedList<'a, 'alloc>),
             >,
             bump: &'alloc Bump,
-        ) -> Option<usize>
+        ) -> Result<Option<usize>, SearchError>
         where
             D: for<'c> Serialize<HighSerializer<AlignedVec, ArenaHandle<'c>, rkyv::rancor::Error>>
                 + Archive
                 + 'static,
         {
             if tokens.len() != 1 {
-                return None;
+                return Ok(None);
             }
 
             let score = match token_to_packed.entry(tokens) {
                 Entry::Occupied(e) => e.get().len(),
-                Entry::Vacant(e) => match me.get_roaringish_packed(rotxn, &tokens[0], mmap) {
-                    Some(packed) => {
-                        let score = packed.len();
-                        e.insert(packed);
+                Entry::Vacant(e) => {
+                    let packed = me.get_roaringish_packed(rotxn, &tokens[0], mmap)?;
+                    let score = packed.len();
+                    e.insert(packed);
 
-                        let linked_list = bump.alloc(RefTokenLinkedList { tokens, next: None });
-                        memo_token_to_score_choices.insert(tokens, (score, linked_list));
-                        score
-                    }
-                    None => 0,
-                },
+                    let linked_list = bump.alloc(RefTokenLinkedList { tokens, next: None });
+                    memo_token_to_score_choices.insert(tokens, (score, linked_list));
+                    score
+                }
             };
-            Some(score)
+            Ok(Some(score))
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -807,7 +624,7 @@ where
             >,
 
             bump: &'alloc Bump,
-        ) -> usize
+        ) -> Result<usize, SearchError>
         where
             D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
                 + Archive
@@ -837,14 +654,10 @@ where
                 let score = match token_to_packed.entry(tokens) {
                     Entry::Occupied(e) => e.get().len(),
                     Entry::Vacant(e) => {
-                        match me.get_roaringish_packed(rotxn, tokens.tokens(), mmap) {
-                            Some(packed) => {
-                                let score = packed.len();
-                                e.insert(packed);
-                                score
-                            }
-                            None => return 0,
-                        }
+                        let packed = me.get_roaringish_packed(rotxn, tokens.tokens(), mmap)?;
+                        let score = packed.len();
+                        e.insert(packed);
+                        score
                     }
                 };
 
@@ -861,7 +674,7 @@ where
                                 mmap,
                                 memo_token_to_score_choices,
                                 bump,
-                            ) {
+                            )? {
                                 Some(score) => score,
                                 None => inner_merge_and_minimize_tokens(
                                     me,
@@ -872,12 +685,12 @@ where
                                     mmap,
                                     memo_token_to_score_choices,
                                     bump,
-                                ),
+                                )?,
                             }
                         }
                     };
                     if rem_score == 0 {
-                        return 0;
+                        return Err(SearchError::MergeAndMinimizeNotPossible);
                     }
                 }
 
@@ -893,8 +706,8 @@ where
             }
 
             let choices = match (best_token_choice, best_rem_choice) {
-                (None, None) => return 0,
-                (None, Some(_)) => return 0,
+                (None, None) => return Err(SearchError::MergeAndMinimizeNotPossible),
+                (None, Some(_)) => return Err(SearchError::MergeAndMinimizeNotPossible),
                 (Some(tokens), None) => bump.alloc(RefTokenLinkedList { tokens, next: None }),
                 (Some(tokens), Some(rem)) => bump.alloc(RefTokenLinkedList {
                     tokens,
@@ -903,7 +716,7 @@ where
             };
 
             memo_token_to_score_choices.insert(tokens, (final_score, choices));
-            final_score
+            Ok(final_score)
         }
 
         // This function neeeds to be inline never, for some reason inlining this
@@ -914,10 +727,13 @@ where
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
             mmap: &'b Mmap,
-        ) -> (
-            Vec<RefTokens<'a>>,
-            GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
-        )
+        ) -> Result<
+            (
+                Vec<RefTokens<'a>>,
+                GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
+            ),
+            SearchError,
+        >
         where
             D: for<'c> Serialize<HighSerializer<AlignedVec, ArenaHandle<'c>, rkyv::rancor::Error>>
                 + Archive
@@ -928,14 +744,12 @@ where
             let mut v = Vec::with_capacity(l);
 
             for token in tokens.ref_token_iter() {
-                match me.get_roaringish_packed(rotxn, token.tokens(), mmap) {
-                    Some(packed) => token_to_packed.insert(token, packed),
-                    None => return (Vec::new(), GxHashMap::new()),
-                };
+                let packed = me.get_roaringish_packed(rotxn, token.tokens(), mmap)?;
+                token_to_packed.insert(token, packed);
                 v.push(token);
             }
 
-            return (v, token_to_packed);
+            return Ok((v, token_to_packed));
         }
 
         if common_tokens.is_empty() {
@@ -954,7 +768,7 @@ where
             mmap,
             &mut memo_token_to_score_choices,
             bump,
-        ) {
+        )? {
             Some(score) => score,
             None => inner_merge_and_minimize_tokens(
                 self,
@@ -965,56 +779,66 @@ where
                 mmap,
                 &mut memo_token_to_score_choices,
                 bump,
-            ),
+            )?,
         };
 
         if score == 0 {
-            return (Vec::new(), GxHashMap::new());
+            return Err(SearchError::MergeAndMinimizeNotPossible);
         }
         match memo_token_to_score_choices.remove(&tokens) {
             Some((_, choices)) => {
                 let v = choices.iter().copied().collect();
-                (v, token_to_packed)
-            },
-            None => (Vec::new(), GxHashMap::new()),
+                Ok((v, token_to_packed))
+            }
+            None => Err(SearchError::MergeAndMinimizeNotPossible),
         }
     }
 
     fn get_roaringish_packed_from_offset<'a>(
         offset: &ArchivedOffset,
         mmap: &'a Mmap,
-    ) -> Option<BorrowRoaringishPacked<'a, Aligned>> {
+    ) -> Result<BorrowRoaringishPacked<'a, Aligned>, SearchError> {
         let begin = offset.begin.to_native() as usize;
         let len = offset.len.to_native() as usize;
         let end = begin + len;
-        let (l, packed, r) = unsafe { &mmap[begin..end].align_to::<u64>() };
-        assert!(l.is_empty());
-        assert!(r.is_empty());
+        let Some(packed) = &mmap.get(begin..end) else {
+            return Err(SearchError::InternalError);
+        };
+        let (l, packed, r) = unsafe { packed.align_to::<u64>() };
+        if !l.is_empty() || !r.is_empty() {
+            return Err(SearchError::InternalError);
+        }
 
         mmap.advise_range(memmap2::Advice::Sequential, begin, len)
-            .unwrap();
+            .map_err(|e| DbError::from(e))?;
 
-        Some(BorrowRoaringishPacked::new_raw(packed))
+        Ok(BorrowRoaringishPacked::new_raw(packed))
     }
 
     #[inline(always)]
-    pub(crate) fn get_roaringish_packed<'a>(
+    pub fn get_roaringish_packed<'a>(
         &self,
         rotxn: &RoTxn,
         token: &str,
         mmap: &'a Mmap,
-    ) -> Option<BorrowRoaringishPacked<'a, Aligned>> {
-        let offset = self.db_token_to_offsets.get(rotxn, token).unwrap()?;
-        Self::get_roaringish_packed_from_offset(offset, mmap)
+    ) -> Result<BorrowRoaringishPacked<'a, Aligned>, SearchError> {
+        let offset = self
+            .db_token_to_offsets
+            .get(rotxn, token)
+            .map_err(|e| DbError::from(e))?;
+        match offset {
+            Some(offset) => Self::get_roaringish_packed_from_offset(offset, mmap),
+            None => Err(SearchError::TokenNotFound(token.to_string())),
+        }
     }
 
-    pub fn search<I: Intersect>(
+    pub fn search<I: Intersection>(
         &self,
         q: &str,
         stats: &Stats,
         common_tokens: &HashSet<Box<str>>,
         mmap: &Mmap,
-    ) -> Vec<u32> {
+    ) -> Result<Vec<u32>, SearchError> {
         stats.iters.fetch_add(1, Relaxed);
 
         let b = std::time::Instant::now();
@@ -1025,41 +849,51 @@ where
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         if tokens.is_empty() {
-            return Vec::new();
+            return Err(SearchError::EmptyQuery);
         }
 
-        let rotxn = self.env.read_txn().unwrap();
+        let rotxn = self.env.read_txn().map_err(|e| DbError::from(e))?;
         if tokens.len() == 1 {
-            return self
-                .get_roaringish_packed(&rotxn, tokens.first().unwrap(), mmap)
-                .map(|p| p.get_doc_ids(stats))
-                .unwrap_or_default();
+            // this can't failt, we just checked
+            self.get_roaringish_packed(&rotxn, tokens.first().unwrap(), mmap)?
+                .get_doc_ids(stats);
         }
 
         let b = std::time::Instant::now();
         let bump = Bump::with_capacity(tokens.reserve_len() * 5);
         let (final_tokens, token_to_packed) =
-            self.merge_and_minimize_tokens(&rotxn, tokens, common_tokens, mmap, &bump);
+            self.merge_and_minimize_tokens(&rotxn, tokens, common_tokens, mmap, &bump)?;
         stats
-            .merge
+            .merge_minimize
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         if final_tokens.is_empty() {
-            return Vec::new();
+            return Err(SearchError::EmptyQuery);
         }
 
         if final_tokens.len() == 1 {
             return token_to_packed
                 .get(&final_tokens[0])
-                .unwrap()
-                .get_doc_ids(stats);
+                .ok_or_else(|| SearchError::TokenNotFound(final_tokens[0].tokens().to_string()))
+                .map(|p| p.get_doc_ids(stats));
         }
 
+        // at this point we know that we have at least
+        // 2 tokens, so the loop will run at least once
+        // changing the value of `i` to be inbounds
         let mut min = usize::MAX;
         let mut i = usize::MAX;
-        for (j, ts) in final_tokens.windows(2).enumerate() {
-            let l0 = token_to_packed.get(&ts[0]).unwrap().len();
-            let l1 = token_to_packed.get(&ts[1]).unwrap().len();
+        for (j, ts) in final_tokens.array_windows::<2>().enumerate() {
+            let l0 = token_to_packed
+                .get(&ts[0])
+                .ok_or_else(|| SearchError::TokenNotFound(ts[0].tokens().to_string()))?
+                .len();
+
+            let l1 = token_to_packed
+                .get(&ts[1])
+                .ok_or_else(|| SearchError::TokenNotFound(ts[1].tokens().to_string()))?
+                .len();
+
             let l = l0 + l1;
             if l <= min {
                 i = j;
@@ -1069,11 +903,15 @@ where
 
         let lhs = &final_tokens[i];
         let mut lhs_len = lhs.len() as u32;
-        let lhs = token_to_packed.get(lhs).unwrap();
+        let lhs = token_to_packed
+            .get(lhs)
+            .ok_or_else(|| SearchError::TokenNotFound(lhs.tokens().to_string()))?;
 
         let rhs = &final_tokens[i + 1];
         let mut rhs_len = rhs.len() as u32;
-        let rhs = token_to_packed.get(rhs).unwrap();
+        let rhs = token_to_packed
+            .get(rhs)
+            .ok_or_else(|| SearchError::TokenNotFound(rhs.tokens().to_string()))?;
 
         let mut result = lhs.intersect::<I>(*rhs, lhs_len, stats);
         let mut result_borrow = BorrowRoaringishPacked::new(&result);
@@ -1086,8 +924,12 @@ where
             let rhs = final_tokens.get(right_i);
             match (lhs, rhs) {
                 (Some(t_lhs), Some(t_rhs)) => {
-                    let lhs = token_to_packed.get(t_lhs).unwrap();
-                    let rhs = token_to_packed.get(t_rhs).unwrap();
+                    let lhs = token_to_packed
+                        .get(t_lhs)
+                        .ok_or_else(|| SearchError::TokenNotFound(t_lhs.tokens().to_string()))?;
+                    let rhs = token_to_packed
+                        .get(t_rhs)
+                        .ok_or_else(|| SearchError::TokenNotFound(t_rhs.tokens().to_string()))?;
                     if lhs.len() <= rhs.len() {
                         lhs_len += t_lhs.len() as u32;
 
@@ -1106,7 +948,9 @@ where
                     }
                 }
                 (Some(t_lhs), None) => {
-                    let lhs = token_to_packed.get(t_lhs).unwrap();
+                    let lhs = token_to_packed
+                        .get(t_lhs)
+                        .ok_or_else(|| SearchError::TokenNotFound(t_lhs.tokens().to_string()))?;
                     lhs_len += t_lhs.len() as u32;
 
                     result = lhs.intersect::<I>(result_borrow, lhs_len, stats);
@@ -1115,7 +959,9 @@ where
                     left_i = left_i.wrapping_sub(1);
                 }
                 (None, Some(t_rhs)) => {
-                    let rhs = token_to_packed.get(t_rhs).unwrap();
+                    let rhs = token_to_packed
+                        .get(t_rhs)
+                        .ok_or_else(|| SearchError::TokenNotFound(t_rhs.tokens().to_string()))?;
 
                     result = result_borrow.intersect::<I>(*rhs, rhs_len, stats);
                     result_borrow = BorrowRoaringishPacked::new(&result);
@@ -1127,8 +973,12 @@ where
                 }
                 (None, None) => break,
             }
+
+            if result.is_empty() {
+                return Err(SearchError::EmptyIntersection);
+            }
         }
 
-        result_borrow.get_doc_ids(stats)
+        Ok(result_borrow.get_doc_ids(stats))
     }
 }
