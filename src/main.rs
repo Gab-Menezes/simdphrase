@@ -189,6 +189,45 @@ where
     }
 }
 
+fn benchmark_meili(args: Search) {
+    fn send(j: &serde_json::Value) -> serde_json::Value {
+        ureq::post("http://localhost:7700/indexes/docs/search")
+        .send_json(j)
+        .unwrap()
+        .into_json()
+        .unwrap()
+    }
+    
+    // TODO: use exahustive
+    let queries = std::fs::read_to_string(args.queries).unwrap();
+    let queries: Vec<_> = queries.lines().collect();
+    for q in queries.iter() {
+        let q = format!("{q:?}");
+        let j = ureq::json!({
+            "q": q,
+            "hitsPerPage": 10
+        });
+        let s = j.to_string();
+
+        for _ in 0..20 {
+            std::hint::black_box(send(&j));
+        }
+
+        let b = std::time::Instant::now();
+        for _ in 0..args.runs {
+            std::hint::black_box(send(&j));
+        }
+        let e = b.elapsed().as_micros();
+        let avg_ms = e as f64 / args.runs as f64 / 1000_f64;
+        let final_time = avg_ms * 0.8f64;
+
+        let r = send(&j);
+        let n_found = &r["totalHits"].as_number().unwrap().as_u64().unwrap();
+
+        println!("{final_time:.4} | {avg_ms:.4} | {n_found}")
+    }
+}
+
 fn main() {
     // #[derive(SerdeSerialize)]
     // struct Doc<'a> {
@@ -223,8 +262,8 @@ fn main() {
     //0.0002f64
     let args = CommandArgs::parse();
 
-    println!("Query             | Simd    | Naive  | Results");
-    println!("------------------| --------| -------| -------");
+    println!("Meilisearch    | Meilisearch (Original)  | Results (Meilisearch)");
+    println!("---------------| ------------------------| ----------------------");
 
     // spawn rayon threads to avoid unecessary respawn
     // rayon::ThreadPoolBuilder::new().build_global().unwrap();
@@ -237,7 +276,8 @@ fn main() {
             DataSet::Text => search::<String>(arg),
             DataSet::Parquet => search::<i32>(arg),
             // DataSet::MsMarco => search::<u32>(arg),
-            DataSet::MsMarco => benchmark::<u32>(arg),
+            // DataSet::MsMarco => benchmark::<u32>(arg),
+            DataSet::MsMarco => benchmark_meili(arg),
         },
     }
 }
