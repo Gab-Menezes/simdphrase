@@ -213,10 +213,16 @@ struct Offset {
     len: u64,
 }
 
-pub struct DB<D>
+/// Represents all types that can be stored in the database.
+/// 
+/// This basically means that the type must be serializable by [rkyv].
+pub trait Document : for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + 'static  {}
+impl<D> Document for D 
 where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive,
+    Self: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + 'static 
+{}
+
+pub struct DB<D: Document>
 {
     pub env: Env,
     db_main: Database<Unspecified, Unspecified>,
@@ -224,26 +230,14 @@ where
     db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
 }
 
-unsafe impl<D> Send for DB<D> where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive
-        + Send
+unsafe impl<D: Document> Send for DB<D>{
+}
+
+unsafe impl<D: Document> Sync for DB<D>
 {
 }
 
-unsafe impl<D> Sync for DB<D> where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive
-        + Sync
-{
-}
-
-impl<D> DB<D>
-where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive
-        + 'static,
-{
+impl<D: Document> DB<D> {
     pub fn truncate<P: AsRef<Path>>(path: P, db_size: usize) -> Result<Self, DbError> {
         let path = path.as_ref();
         std::fs::remove_dir_all(path)?;
@@ -575,7 +569,7 @@ where
         SearchError,
     > {
         #[inline(always)]
-        fn check_before_recursion<'a, 'b, 'alloc, D>(
+        fn check_before_recursion<'a, 'b, 'alloc, D: Document>(
             me: &DB<D>,
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
@@ -587,10 +581,6 @@ where
             >,
             bump: &'alloc Bump,
         ) -> Result<Option<usize>, SearchError>
-        where
-            D: for<'c> Serialize<HighSerializer<AlignedVec, ArenaHandle<'c>, rkyv::rancor::Error>>
-                + Archive
-                + 'static,
         {
             if tokens.len() != 1 {
                 return Ok(None);
@@ -612,7 +602,7 @@ where
         }
 
         #[allow(clippy::too_many_arguments)]
-        fn inner_merge_and_minimize_tokens<'a, 'b, 'c, 'alloc, D>(
+        fn inner_merge_and_minimize_tokens<'a, 'b, 'c, 'alloc, D: Document>(
             me: &DB<D>,
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
@@ -625,12 +615,7 @@ where
             >,
 
             bump: &'alloc Bump,
-        ) -> Result<usize, SearchError>
-        where
-            D: for<'d> Serialize<HighSerializer<AlignedVec, ArenaHandle<'d>, rkyv::rancor::Error>>
-                + Archive
-                + 'static,
-        {
+        ) -> Result<usize, SearchError> {
             const { assert!(MAX_WINDOW_LEN.get() == 3) };
             let mut final_score = usize::MAX;
             let mut best_token_choice = None;
@@ -723,7 +708,7 @@ where
         // This function neeeds to be inline never, for some reason inlining this
         // function makes some queries performance unpredictable
         #[inline(never)]
-        fn no_common_tokens<'a, 'b, 'alloc, D>(
+        fn no_common_tokens<'a, 'b, 'alloc, D: Document>(
             me: &DB<D>,
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
@@ -734,12 +719,7 @@ where
                 GxHashMap<RefTokens<'a>, BorrowRoaringishPacked<'b, Aligned>>,
             ),
             SearchError,
-        >
-        where
-            D: for<'c> Serialize<HighSerializer<AlignedVec, ArenaHandle<'c>, rkyv::rancor::Error>>
-                + Archive
-                + 'static,
-        {
+        > {
             let l = tokens.len();
             let mut token_to_packed = GxHashMap::with_capacity(l);
             let mut v = Vec::with_capacity(l);

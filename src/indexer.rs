@@ -4,11 +4,8 @@ use fxhash::FxHashMap;
 use gxhash::{HashMap as GxHashMap, HashMapExt};
 use heed::RwTxn;
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
-use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
-};
 use crate::{
-    db::{DB, MAX_WINDOW_LEN}, decreasing_window_iter::DecreasingWindows, error::DbError, roaringish::MAX_VALUE, utils::{normalize, tokenize}, RoaringishPacked
+    db::{Document, DB, MAX_WINDOW_LEN}, decreasing_window_iter::DecreasingWindows, error::DbError, roaringish::MAX_VALUE, utils::{normalize, tokenize}, RoaringishPacked
 };
 
 /// Specifies how the common tokens are treated during indexing.
@@ -24,11 +21,7 @@ pub enum CommonTokens {
 
 /// Batch of documents to be indexed.
 #[derive(Debug)]
-struct Batch<D>
-where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive,
-{
+struct Batch<D: Document> {
     /// Monotonically increasing batch id.
     batch_id: u32,
 
@@ -68,12 +61,7 @@ where
     tokenized_docs: Vec<Vec<u32>>,
 }
 
-impl<D> Batch<D>
-where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive
-        + 'static,
-{
+impl<D: Document> Batch<D> {
     /// Constructs a new batch.
     fn new() -> Self {
         Self {
@@ -354,9 +342,7 @@ impl Indexer {
     where
         S: AsRef<str>,
         I: IntoIterator<Item = (S, D)>,
-        D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-            + Archive
-            + 'static,
+        D: Document,
         P: AsRef<Path>,
     {
         let db = DB::truncate(path, db_size)?;

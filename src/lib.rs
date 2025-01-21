@@ -34,6 +34,7 @@ use allocator::Aligned64;
 use db::DB;
 use roaringish::RoaringishPacked;
 
+pub use db::Document;
 pub use stats::Stats;
 pub use error::{DbError, SearchError};
 pub use indexer::CommonTokens;

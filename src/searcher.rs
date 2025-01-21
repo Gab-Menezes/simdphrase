@@ -1,12 +1,8 @@
 use std::{collections::HashSet, path::Path};
 
 use memmap2::Mmap;
-use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Serialize,
-};
-
 use crate::{
-    DbError, Intersection, SearchError, Stats, DB
+    db::Document, DbError, Intersection, SearchError, Stats, DB
 };
 
 /// Final result of a search operation.
@@ -24,22 +20,13 @@ impl SearchResult {
 }
 
 /// Object responsible for searching the database.
-pub struct Searcher<D>
-where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive,
-{
+pub struct Searcher<D: Document> {
     db: DB<D>,
     common_tokens: HashSet<Box<str>>,
     mmap: Mmap,
 }
 
-impl<D> Searcher<D>
-where
-    D: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
-        + Archive
-        + 'static,
-{
+impl<D: Document> Searcher<D> {
     /// Create a new searcher object.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, DbError> {
         let (db, common_tokens, mmap) = DB::open(path)?;
