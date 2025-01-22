@@ -10,7 +10,7 @@ readme = "README.md"
 repository = "https://github.com/Gab-Menezes/simdphrase"
 description = "Extremely fast phrase search implementation."
 keywords = ["simd", "phrase", "search", "information", "retrieval"]
-categories = ["search-engine", "data-structures"]
+categories = ["algorithms", "data-structures", "database"]
 exclude = [
     "flake.nix",
     "flake.lock",
