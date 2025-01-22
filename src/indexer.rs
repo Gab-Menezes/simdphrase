@@ -6,7 +6,7 @@ use crate::{
     error::DbError,
     roaringish::MAX_VALUE,
     utils::{normalize, tokenize},
-    RoaringishPacked,
+    RoaringishPacked, Searcher,
 };
 use fxhash::FxHashMap;
 use gxhash::{HashMap as GxHashMap, HashMapExt};
@@ -350,13 +350,16 @@ impl Indexer {
     /// So the content of the document (`&str`) can be different from the stored version (`D`).
     ///
     /// The type `D` is anything that can be serialized by [rkyv].
-    pub fn index<S, D, I, P>(&self, docs: I, path: P, db_size: usize) -> Result<u32, DbError>
+    /// 
+    /// This returns a [Searcher] object and the number of indexed documents.
+    pub fn index<S, D, I, P>(&self, docs: I, path: P, db_size: usize) -> Result<(Searcher<D>, u32), DbError>
     where
         S: AsRef<str>,
         I: IntoIterator<Item = (S, D)>,
         D: Document,
         P: AsRef<Path>,
     {
+        let path = path.as_ref();
         let db = DB::truncate(path, db_size)?;
         let mut rwtxn = db.env.write_txn()?;
 
@@ -435,6 +438,7 @@ impl Indexer {
         rwtxn.commit()?;
         log::info!("Commit took {:?}", b.elapsed());
 
-        Ok(next_doc_id)
+        let searcher = Searcher::new(path)?;
+        Ok((searcher, next_doc_id))
     }
 }
