@@ -1,8 +1,7 @@
 use std::{borrow::Cow, marker::PhantomData};
 
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Archived,
-    Serialize,
+    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Archived, Serialize
 };
 
 pub struct ZeroCopyCodec<T>(PhantomData<T>)
@@ -19,9 +18,10 @@ where
     type EItem = T;
 
     fn bytes_encode(item: &'a Self::EItem) -> Result<Cow<'a, [u8]>, heed::BoxedError> {
-        // Serializing a value should never fail
-        let bytes = rkyv::to_bytes(item).unwrap();        
-        Ok(Cow::Owned(bytes.to_vec()))
+        let bytes = rkyv::to_bytes(item)
+        .map(|bytes| Cow::Owned(bytes.to_vec()));
+
+        Ok(bytes?)
     }
 }
 

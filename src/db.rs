@@ -7,11 +7,13 @@ use heed::{
 use memmap2::{Mmap, MmapMut};
 use rkyv::{
     api::high::HighSerializer,
+    de::Pool,
     deserialize,
+    rancor::Strategy,
     ser::{allocator::ArenaHandle, writer::IoWriter},
     util::AlignedVec,
     with::InlineAsBox,
-    Archive, Archived, Serialize,
+    Archive, Archived, Deserialize, Serialize,
 };
 use std::{
     cmp::Reverse,
@@ -27,10 +29,12 @@ use std::{
 };
 
 use crate::{
-    codecs::{NativeU32, ZeroCopyCodec}, error::{DbError, SearchError}, normalize, roaringish::{
-        Aligned, ArchivedBorrowRoaringishPacked, RoaringishPackedKind,
-        Unaligned,
-    }, stats::Stats, tokenize, BorrowRoaringishPacked, Intersection, RoaringishPacked
+    codecs::{NativeU32, ZeroCopyCodec},
+    error::{DbError, GetDocumentError, SearchError},
+    normalize,
+    roaringish::{Aligned, ArchivedBorrowRoaringishPacked, RoaringishPackedKind, Unaligned},
+    stats::Stats,
+    tokenize, BorrowRoaringishPacked, Intersection, RoaringishPacked,
 };
 
 struct Tokens {
@@ -214,28 +218,31 @@ struct Offset {
 }
 
 /// Represents all types that can be stored in the database.
-/// 
+///
 /// This basically means that the type must be serializable by [rkyv].
-pub trait Document : for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + 'static  {}
-impl<D> Document for D 
-where
-    Self: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>> + Archive + 'static 
-{}
-
-pub struct DB<D: Document>
+pub trait Document:
+    for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+    + Archive
+    + 'static
 {
+}
+impl<D> Document for D where
+    Self: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rkyv::rancor::Error>>
+        + Archive
+        + 'static
+{
+}
+
+pub struct DB<D: Document> {
     pub env: Env,
     db_main: Database<Unspecified, Unspecified>,
     db_doc_id_to_document: Database<NativeU32, ZeroCopyCodec<D>>,
     db_token_to_offsets: Database<Str, ZeroCopyCodec<Offset>>,
 }
 
-unsafe impl<D: Document> Send for DB<D>{
-}
+unsafe impl<D: Document> Send for DB<D> {}
 
-unsafe impl<D: Document> Sync for DB<D>
-{
-}
+unsafe impl<D: Document> Sync for DB<D> {}
 
 impl<D: Document> DB<D> {
     pub fn truncate<P: AsRef<Path>>(path: P, db_size: usize) -> Result<Self, DbError> {
@@ -596,8 +603,7 @@ impl<D: Document> DB<D> {
                 (usize, &'alloc RefTokenLinkedList<'a, 'alloc>),
             >,
             bump: &'alloc Bump,
-        ) -> Result<Option<usize>, SearchError>
-        {
+        ) -> Result<Option<usize>, SearchError> {
             if tokens.len() != 1 {
                 return Ok(None);
             }
@@ -977,5 +983,70 @@ impl<D: Document> DB<D> {
         }
 
         Ok(result_borrow.get_doc_ids(stats))
+    }
+
+    fn inner_get_archived_document<'a>(
+        &self,
+        rotxn: &'a RoTxn,
+        doc_id: &u32,
+    ) -> Result<&'a D::Archived, GetDocumentError> {
+        self.db_doc_id_to_document
+            .get(rotxn, doc_id)
+            .map_err(|e| DbError::from(e))?
+            .ok_or(GetDocumentError::DocumentNotFound(*doc_id))
+    }
+
+    pub fn get_archived_documents(
+        &self,
+        doc_ids: &[u32],
+        cb: impl FnOnce(Vec<&D::Archived>),
+    ) -> Result<(), GetDocumentError> {
+        let rotxn = self.env.read_txn().map_err(|e| DbError::from(e))?;
+        let docs = doc_ids
+            .into_iter()
+            .map(|doc_id| self.inner_get_archived_document(&rotxn, doc_id))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        cb(docs);
+
+        Ok(())
+    }
+
+    pub fn get_archived_document(
+        &self,
+        doc_id: u32,
+        cb: impl FnOnce(&D::Archived),
+    ) -> Result<(), GetDocumentError> {
+        let rotxn = self.env.read_txn().map_err(|e| DbError::from(e))?;
+        let doc = self.inner_get_archived_document(&rotxn, &doc_id)?;
+
+        cb(doc);
+
+        Ok(())
+    }
+
+    pub fn get_documents(&self, doc_ids: &[u32]) -> Result<Vec<D>, GetDocumentError>
+    where
+        <D as Archive>::Archived: Deserialize<D, Strategy<Pool, rkyv::rancor::Error>>,
+    {
+        let rotxn = self.env.read_txn().map_err(|e| DbError::from(e))?;
+        doc_ids
+            .into_iter()
+            .map(|doc_id| {
+                let archived = self.inner_get_archived_document(&rotxn, doc_id)?;
+                rkyv::deserialize::<D, rkyv::rancor::Error>(archived)
+                    .map_err(|e| GetDocumentError::DbError(DbError::from(e)))
+            })
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    pub fn get_document(&self, doc_id: u32) -> Result<D, GetDocumentError>
+    where
+        <D as Archive>::Archived: Deserialize<D, Strategy<Pool, rkyv::rancor::Error>>,
+    {
+        let rotxn = self.env.read_txn().map_err(|e| DbError::from(e))?;
+        let archived = self.inner_get_archived_document(&rotxn, &doc_id)?;
+        rkyv::deserialize::<D, rkyv::rancor::Error>(archived)
+            .map_err(|e| GetDocumentError::DbError(DbError::from(e)))
     }
 }

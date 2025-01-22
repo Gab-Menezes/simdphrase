@@ -38,5 +38,15 @@ pub enum SearchError {
     EmptyIntersection,
 
     #[error("Catastrophic error has occurred")]
-    InternalError
+    InternalError,
+}
+
+/// Possible errors when trying to retrieve documents by their internal ID.
+#[derive(Error, Debug)]
+pub enum GetDocumentError {
+    #[error("Db error: {0}")]
+    DbError(#[from] DbError),
+
+    #[error("Document with id `{0}` not found")]
+    DocumentNotFound(u32),
 }

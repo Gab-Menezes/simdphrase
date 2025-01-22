@@ -29,7 +29,7 @@ use roaringish::RoaringishPacked;
 
 pub use db::Document;
 pub use stats::Stats;
-pub use error::{DbError, SearchError};
+pub use error::{DbError, SearchError, GetDocumentError};
 pub use indexer::CommonTokens;
 pub use indexer::Indexer;
 
