@@ -1,4 +1,4 @@
-# Phrase Search
+# Simd Phrase Search
 
 Extremely fast phrase search implementation.
 
