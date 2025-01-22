@@ -15,6 +15,7 @@ hyperloglogplus = { version = "0.4.1", features = ["const-loop"] }
 bumpalo = "3.16.0"
 gxhash = "3.4.1"
 thiserror = "2.0.11"
+log = "0.4.25"
 
 [profile.dev]
 rustflags = [

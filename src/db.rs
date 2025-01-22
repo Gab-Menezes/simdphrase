@@ -281,10 +281,13 @@ impl<D: Document> DB<D> {
         doc_ids: &[u32],
         documents: &[D],
     ) -> Result<(), DbError> {
+        log::debug!("Writing documents");
+        let b = std::time::Instant::now();
         for (doc_id, document) in doc_ids.iter().zip(documents.iter()) {
             self.db_doc_id_to_document
                 .put_with_flags(rwtxn, PutFlags::APPEND, doc_id, document)?;
         }
+        log::debug!("Writing documents took {:?}", b.elapsed());
         Ok(())
     }
 
@@ -295,6 +298,8 @@ impl<D: Document> DB<D> {
         mmap_size: &mut usize,
         batch_id: u32,
     ) -> Result<(), DbError> {
+        log::debug!("Writing token to roaringish packed");
+        let b = std::time::Instant::now();
         let mut token_to_packed: Vec<_> = token_to_token_id
             .iter()
             .map(|(token, token_id)| {
@@ -315,6 +320,7 @@ impl<D: Document> DB<D> {
                 .open(self.env.path().join(file_name))?,
         ));
         rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&token_to_packed, file)?;
+        log::debug!("Writing token to roaringish packed took {:?}", b.elapsed());
         Ok(())
     }
 
@@ -345,13 +351,17 @@ impl<D: Document> DB<D> {
             }
         }
 
+        log::info!("Merging roaringish packed files to generate the final memory map file");
+        let b = std::time::Instant::now();
         let file = File::options()
             .create(true)
             .truncate(true)
             .read(true)
             .write(true)
             .open(self.env.path().join(db_constants::FILE_ROARINGISH_PACKED))?;
-        file.set_len(mmap_size as u64 + (number_of_distinct_tokens * 64))?;
+        let final_size = mmap_size as u64 + (number_of_distinct_tokens * 64);
+        log::debug!("Creating file with size: {} bytes", final_size);
+        file.set_len(final_size)?;
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
         let mut mmap_offset = 0;
 
@@ -466,10 +476,13 @@ impl<D: Document> DB<D> {
         drop(files_data);
         drop(files_mmaps);
 
+        log::debug!("Finished merging roaringish packed files");
+        log::debug!("Removing old files");
         for i in 0..number_of_batches {
             let file_name = format!("{}_{i}", db_constants::TEMP_FILE_TOKEN_TO_PACKED);
             std::fs::remove_file(self.env.path().join(file_name))?;
         }
+        log::info!("Whole merging process took {:?}", b.elapsed());
 
         Ok(())
     }
@@ -496,9 +509,12 @@ impl<D: Document> DB<D> {
         rwtxn: &mut RwTxn,
         common_tokens: &HashSet<Box<str>>,
     ) -> Result<(), DbError> {
+        log::debug!("Writing common tokens");
+        let b = std::time::Instant::now();
         self.db_main
             .remap_types::<Str, ZeroCopyCodec<HashSet<Box<str>>>>()
             .put(rwtxn, db_constants::KEY_COMMON_TOKENS, common_tokens)?;
+        log::debug!("Writing common tokens took {:?}", b.elapsed());
         Ok(())
     }
 

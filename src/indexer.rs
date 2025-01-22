@@ -184,8 +184,12 @@ impl<D: Document> Batch<D> {
         common_tokens: &HashSet<Box<str>>,
         mmap_size: &mut usize,
     ) -> Result<(), DbError> {
+        log::info!("Flushing batch");
+        let b = std::time::Instant::now();
+
         // Nothing to do if the batch is empty.
         if self.doc_ids.is_empty() {
+            log::debug!("Empty batch, nothing to flush");
             return Ok(());
         }
 
@@ -201,6 +205,7 @@ impl<D: Document> Batch<D> {
 
         self.batch_id += 1;
         self.clear();
+        log::info!("Flush took {:?}", b.elapsed());
         Ok(())
     }
 
@@ -228,10 +233,12 @@ impl<D: Document> Batch<D> {
     /// 
     /// This will generate all possible combinations of the merging process.
     fn merge_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
+        log::debug!("Merging common tokens");
         if common_tokens.is_empty() {
             return;
         }
 
+        let b = std::time::Instant::now();
         for (tokenized_doc, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
             let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
             let it = DecreasingWindows::new(tokenized_doc, MAX_WINDOW_LEN);
@@ -274,6 +281,7 @@ impl<D: Document> Batch<D> {
                 self.token_id_to_roaringish_packed[*token_id as usize].push(*doc_id, positions);
             }
         }
+        log::debug!("Merge took {:?}", b.elapsed());
     }
 }
 
@@ -357,8 +365,9 @@ impl Indexer {
         let mut next_doc_id = 0;
         let mut mmap_size = 0;
 
+        log::info!("Starting first batch");
         // Index the first batch to generate the common tokens
-        let mut b = std::time::Instant::now();
+        let b = std::time::Instant::now();
         for (content, doc) in it.by_ref() {
             let doc_id = next_doc_id;
             next_doc_id += 1;
@@ -375,15 +384,16 @@ impl Indexer {
                 break;
             }
         }
+        log::info!("First batch took {:?}", b.elapsed());
 
         let common_tokens = self.generate_common_tokens(&token_to_freq);
         drop(token_to_freq);
 
         batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size)?;
-        println!("flushed batch in {}", b.elapsed().as_secs());
 
         // Index the rest of the documents
-        b = std::time::Instant::now();
+        log::info!("Starting new batch");
+        let mut b = std::time::Instant::now();
         for (content, doc) in it {
             let doc_id = next_doc_id;
             next_doc_id += 1;
@@ -391,9 +401,10 @@ impl Indexer {
             batch.push(doc_id, content.as_ref(), doc, |_| {});
 
             if next_doc_id % batch_size == 0 {
-                batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size)?;
-                println!("flushed batch in {}", b.elapsed().as_secs());
+                log::info!("Batch took {:?}", b.elapsed());
                 b = std::time::Instant::now();
+                batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size)?;
+                log::info!("Starting new batch");
             }
         }
 
@@ -401,18 +412,21 @@ impl Indexer {
         batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size)?;
 
         let number_of_distinct_tokens = batch.estimate_number_of_distinct_tokens();
+        log::debug!("Approximation for the number of distinct tokens: {}", number_of_distinct_tokens);
 
         // Write to db
         db.write_common_tokens(&mut rwtxn, &common_tokens)?;
-        b = std::time::Instant::now();
         db.generate_mmap_file(
             number_of_distinct_tokens,
             mmap_size,
             batch.batch_id,
             &mut rwtxn,
         )?;
-        println!("write mmap {}", b.elapsed().as_secs());
+
+        let b = std::time::Instant::now();
+        log::info!("Commiting");
         rwtxn.commit()?;
+        log::info!("Commit took {:?}", b.elapsed());
 
         Ok(next_doc_id)
     }
