@@ -44,6 +44,7 @@
 //!
 //! // Search by the string "78"
 //! let result = searcher.search::<SimdIntersect>("at my beautiful")?;
+//! // This should return `[0, 35]`
 //! let documents = result.get_documents()?;
 //! ```
 
