@@ -1,17 +1,41 @@
-# Phrase Search POC
+# Phrase Search
 
-## Index
-`cargo run --release -- index-folder <FOLDER> <INDEX_NAME> <FILES_PER_INDEX> <DB_SIZE> <MAX_DOC_ID>`
+Extremely fast phrase search implementation.
 
-Example: `cargo run --release -- index-folder ./data ./db 80 2147483648 5000000`
+## Overview
 
-Note: Add `--recursive` at the end if the `.jsonl` files are in folders inside the main folder
+This implementation follows some of the ideas proposed in this 
+[blog post](https://softwaredoug.com/blog/2024/01/21/search-array-phrase-algorithm) 
+by [Doug Turnbull](https://softwaredoug.com/). The full explanation on how the internals
+work can be found in [here](https://gab-menezes.github.io/2025/01/13/using-the-most-unhinged-avx-512-instruction-to-make-the-fastest-phrase-search-algo.html).
 
-* During indexing the data files will be broken in `FILES_PER_INDEX` chunks, each of this chuck will become a shard
-* Common tokens will be merged together
-* Some information about the indexing will be tracked, since Heed leaks a shit ton of memory we use this tracked data to continue the indexing if it dies. To continue the indexing just run the same command.
+This crate uses the [log] crate for logging during indexing.
 
-## Search
-`sudo ./target/release/phrase_search search <RUNS> <QUERIES> <INDEX_NAME> <DB_SIZE>`
+## Usage
 
-Example: `sudo ./target/release/phrase_search search 100 ./queries.txt ./db 2147483648`
+```rust
+use phrase_search::{CommonTokens, Indexer, SimdIntersect};
+
+// Creates a new indexer that can be reused, it will index 300_000 documents
+// in each batch and will use the top 50 most common tokens to speed up the search,
+// by merging them.
+let indexer = Indexer::new(Some(300_000), Some(CommonTokens::FixedNum(50)));
+
+let docs = vec![
+    ("look at my beautiful cat", 0),
+    ("this is a document", 50),
+    ("look at my dog", 25),
+    ("look at my beautiful hamster", 35),
+];
+let index_name = "./index";
+let db_size = 1024 * 1024;
+
+// Indexes the documents returned by the iterator `it`.
+// The index will be created at `index_name` with the given `db_size`.
+let (searcher, num_indexed_documents) = indexer.index(docs, index_name, db_size)?;
+
+// Search by the string "78"
+let result = searcher.search::<SimdIntersect>("at my beautiful")?;
+// This should return `[0, 35]`
+let documents = result.get_documents()?;
+```
