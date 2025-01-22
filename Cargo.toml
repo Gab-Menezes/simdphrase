@@ -9,7 +9,7 @@ authors = ["Gabriel Menezes <gabriel.jorge.menezes@gmail.com>"]
 readme = "README.md"
 repository = "https://github.com/Gab-Menezes/phrase_search"
 description = "Extremely fast phrase search implementation."
-keywords = ["fast", "simd", "phrase", "search", "information", "retrieval"]
+keywords = ["simd", "phrase", "search", "information", "retrieval"]
 categories = ["search-engine", "data-structures"]
 exclude = [
     "flake.nix",
