@@ -19,6 +19,8 @@
 //! by [Doug Turnbull](https://softwaredoug.com/). The full explanation on how the internals
 //! work can be found in [here](https://gab-menezes.github.io/2025/01/13/using-the-most-unhinged-avx-512-instruction-to-make-the-fastest-phrase-search-algo.html).
 //! 
+//! This crate uses the [log] crate for logging during indexing.
+//! 
 //! ## Usage
 //! 
 //! ```rust
