@@ -1,6 +1,6 @@
 use unicode_segmentation::UnicodeSegmentation;
 
-/// Normalizes the input string by trimming leading and trailing 
+/// Normalizes the input string by trimming leading and trailing
 /// whitespaces and converting it to lowercase.
 pub fn normalize(s: &str) -> String {
     s.trim_start().trim_end().to_lowercase()

@@ -16,7 +16,7 @@ pub enum DbError {
     DatabaseError(String),
 
     #[error("Key `{0}` not found in database `{1}`")]
-    KeyNotFound(String, String)
+    KeyNotFound(String, String),
 }
 
 /// Possible errors that can occur while searching.

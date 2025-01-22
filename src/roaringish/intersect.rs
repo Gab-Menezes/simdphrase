@@ -1,5 +1,3 @@
-// use super::private::BorrowRoaringishPacked;
-
 use std::mem::MaybeUninit;
 
 use crate::{allocator::Aligned64, Stats};
@@ -19,7 +17,7 @@ mod private {
 pub trait Intersection: Intersect {}
 
 /// Necessary functions for an intersection algorithm.
-/// 
+///
 /// The intersection is done in two phases that's why
 /// the function have a `FIRST` const generic.
 pub trait Intersect: private::IntersectSeal {
@@ -87,7 +85,7 @@ pub trait Intersect: private::IntersectSeal {
     }
 
     /// Performs the intersection.
-    /// 
+    ///
     /// `msb_packed_result` has 0 capacity if `FIRST` is false.
     #[allow(clippy::too_many_arguments)]
     fn inner_intersect<const FIRST: bool>(

@@ -1,12 +1,17 @@
 use std::{cmp::Reverse, collections::HashSet, path::Path};
 
+use crate::{
+    db::{Document, DB, MAX_WINDOW_LEN},
+    decreasing_window_iter::DecreasingWindows,
+    error::DbError,
+    roaringish::MAX_VALUE,
+    utils::{normalize, tokenize},
+    RoaringishPacked,
+};
 use fxhash::FxHashMap;
 use gxhash::{HashMap as GxHashMap, HashMapExt};
 use heed::RwTxn;
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
-use crate::{
-    db::{Document, DB, MAX_WINDOW_LEN}, decreasing_window_iter::DecreasingWindows, error::DbError, roaringish::MAX_VALUE, utils::{normalize, tokenize}, RoaringishPacked
-};
 
 /// Specifies how the common tokens are treated during indexing.
 #[derive(Debug)]
@@ -35,28 +40,27 @@ struct Batch<D: Document> {
     token_to_token_id: GxHashMap<Box<str>, u32>,
 
     /// Maps token ids to their roaringish packed data (cleared after each batch).
-    /// 
+    ///
     /// This should be in sync with `token_id_to_token`
     token_id_to_roaringish_packed: Vec<RoaringishPacked>,
     /// Maps token ids to tokens (cleared after each batch).
-    /// 
+    ///
     /// This should be in sync with `token_id_to_roaringish_packed`
     token_id_to_token: Vec<Box<str>>,
 
     // this 3 containers are in sync
-
     /// Document ids in the batch (cleared after each batch).
-    /// 
+    ///
     /// This should be in sync with `documents` and `tokenized_docs`.
     doc_ids: Vec<u32>,
     /// Documents in the batch (cleared after each batch).
-    /// 
+    ///
     /// This should be in sync with `doc_ids` and `tokenized_docs`.
     documents: Vec<D>,
 
     /// Tokenized representation of the documents in the batch (cleared after each batch).
     /// This representation is done by storing the token id.
-    /// 
+    ///
     /// This should be in sync with `doc_ids` and `documents`.
     tokenized_docs: Vec<Vec<u32>>,
 }
@@ -84,7 +88,7 @@ impl<D: Document> Batch<D> {
     }
 
     /// Clears the batch.
-    /// 
+    ///
     /// This should be called after each flush and before the start of a new batch.
     fn clear(&mut self) {
         self.next_token_id = 0;
@@ -98,7 +102,7 @@ impl<D: Document> Batch<D> {
     }
 
     /// Adds a document to the batch and starts the indexing process.
-    /// 
+    ///
     /// `count_freq` is used to count the frequency of each token. This should
     /// only be used in the first batch, allowing us to generate the common tokens.
     fn push(&mut self, doc_id: u32, content: &str, doc: D, count_freq: impl FnMut(&str)) {
@@ -139,7 +143,7 @@ impl<D: Document> Batch<D> {
     }
 
     /// Indexes `content`s for this `doc_id`.
-    /// 
+    ///
     /// `count_freq` is used to count the frequency of each token. This should
     /// only be used in the first batch, allowing us to generate the common tokens.
     fn index_doc(
@@ -209,18 +213,18 @@ impl<D: Document> Batch<D> {
         Ok(())
     }
 
-    /// Merges the tokens for all of the documents in the batch. 
+    /// Merges the tokens for all of the documents in the batch.
     /// This will create new tokens and consequently new token ids.
-    /// 
+    ///
     /// The generation is done by merging up to [MAX_WINDOW_LEN] tokens at a time.
     /// We are only allowed to merge:
     /// * Common tokens with other common tokens.
     /// * Rare tokens with a common token.
     /// * Common tokens with a rare token.
-    /// 
+    ///
     /// So if it's impossible for the generated token to have two rare tokens.
     /// Also if rare tokens can only be in the first or last position, for example:
-    /// 
+    ///
     /// # Examples
     /// ```
     /// c c
@@ -230,7 +234,7 @@ impl<D: Document> Batch<D> {
     /// c r
     /// c c r
     /// ```
-    /// 
+    ///
     /// This will generate all possible combinations of the merging process.
     fn merge_common_tokens(&mut self, common_tokens: &HashSet<Box<str>>) {
         log::debug!("Merging common tokens");
@@ -293,7 +297,7 @@ pub struct Indexer {
 
 impl Indexer {
     /// Creates a new indexer.
-    /// 
+    ///
     /// * If `batch_size` is [None] then the indexer will index all the documents in a single batch.
     /// * If `common_tokens` is [None] then merging will happen.
     pub fn new(batch_size: Option<u32>, common_tokens: Option<CommonTokens>) -> Self {
@@ -339,12 +343,12 @@ impl Indexer {
     }
 
     /// Indexes an iterator of documents.
-    /// 
+    ///
     /// This iterator should essentially return a tuple `(&str, D)`, where
     /// `D` is the form of the document that will be serialized and stored in the database.
-    /// 
+    ///
     /// So the content of the document (`&str`) can be different from the stored version (`D`).
-    /// 
+    ///
     /// The type `D` is anything that can be serialized by [rkyv].
     pub fn index<S, D, I, P>(&self, docs: I, path: P, db_size: usize) -> Result<u32, DbError>
     where
@@ -412,7 +416,10 @@ impl Indexer {
         batch.flush(&db, &mut rwtxn, &common_tokens, &mut mmap_size)?;
 
         let number_of_distinct_tokens = batch.estimate_number_of_distinct_tokens();
-        log::debug!("Approximation for the number of distinct tokens: {}", number_of_distinct_tokens);
+        log::debug!(
+            "Approximation for the number of distinct tokens: {}",
+            number_of_distinct_tokens
+        );
 
         // Write to db
         db.write_common_tokens(&mut rwtxn, &common_tokens)?;

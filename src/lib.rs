@@ -14,28 +14,28 @@ mod allocator;
 mod codecs;
 mod db;
 mod decreasing_window_iter;
+mod error;
 mod indexer;
 mod roaringish;
 mod searcher;
-mod utils;
-mod error;
 mod stats;
+mod utils;
 
-use utils::{normalize, tokenize};
-use roaringish::BorrowRoaringishPacked;
 use allocator::Aligned64;
 use db::DB;
+use roaringish::BorrowRoaringishPacked;
 use roaringish::RoaringishPacked;
+use utils::{normalize, tokenize};
 
 pub use db::Document;
-pub use stats::Stats;
-pub use error::{DbError, SearchError, GetDocumentError};
+pub use error::{DbError, GetDocumentError, SearchError};
 pub use indexer::CommonTokens;
 pub use indexer::Indexer;
+pub use stats::Stats;
 
 pub use roaringish::intersect::naive::NaiveIntersect;
 
 #[cfg(target_feature = "avx512f")]
 pub use roaringish::intersect::simd::SimdIntersect;
 pub use roaringish::intersect::Intersection;
-pub use searcher::{Searcher, SearchResult};
+pub use searcher::{SearchResult, Searcher};

@@ -1,6 +1,8 @@
 pub mod intersect;
 
-use intersect::{gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond, Intersect};
+use intersect::{
+    gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond, Intersect,
+};
 use rkyv::{with::InlineAsBox, Archive, Serialize};
 use std::{
     arch::x86_64::_mm256_mask_compressstoreu_epi32,
@@ -12,8 +14,8 @@ use std::{
     sync::atomic::Ordering::Relaxed,
 };
 
-use crate::{allocator::Aligned64, Intersection};
 use crate::Stats;
+use crate::{allocator::Aligned64, Intersection};
 
 pub const MAX_VALUE: u32 = 16u32 * u16::MAX as u32;
 pub const ADD_ONE_GROUP: u64 = u16::MAX as u64 + 1;
@@ -54,7 +56,7 @@ const fn pack_doc_id_group(packed_doc_id: u64, group: u16) -> u64 {
 }
 
 /// Packs a document ID, group (they should already be in their packed form),
-/// also packs a value 
+/// also packs a value
 const fn pack(packed_doc_id: u64, group: u16, value: u16) -> u64 {
     pack_doc_id_group(packed_doc_id, group) | pack_value(value)
 }
@@ -183,16 +185,16 @@ impl<'a, A> RoaringishPackedKind<'a, A> {
 /// Main data structure used for phrase search.
 /// In here we store a compact representation of the
 /// document IDs and positions.
-/// 
+///
 /// The representation should be in the form:
 /// ```
 /// document ID | group   | values
 ///   32 bits   | 16 bits | 16 bits
 /// ```
-/// 
+///
 /// So the packed fits into 64 bits.
-/// 
-/// The data structure should be ordered by the 
+///
+/// The data structure should be ordered by the
 /// document ID and group.
 #[derive(PartialEq, Eq, Debug, Serialize, Archive)]
 #[repr(transparent)]
@@ -281,7 +283,7 @@ impl<A> Deref for BorrowRoaringishPacked<'_, A> {
 impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     /// Creates a new Roaringish Packed from
     /// the packed representation.
-    /// 
+    ///
     /// Checks if it's aligned to 64 bytes.
     pub fn new_raw(packed: &'a [u64]) -> Self {
         assert!(packed.as_ptr().is_aligned_to(64));
@@ -404,7 +406,7 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
     }
 
     /// Merges the results of the first and second phase of the intersection.
-    /// 
+    ///
     /// This function neeeds to be inline always, for some reason not inlining this
     /// function makes some queries performance unpredictable
     #[inline(always)]

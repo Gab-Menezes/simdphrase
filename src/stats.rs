@@ -1,4 +1,7 @@
-use std::{fmt::Debug, sync::atomic::{AtomicU64, Ordering::Relaxed}};
+use std::{
+    fmt::Debug,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
+};
 
 /// Time stats collected during search.
 #[derive(Default)]
