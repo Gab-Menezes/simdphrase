@@ -4,6 +4,13 @@ cargo-features = ["profile-rustflags"]
 name = "phrase_search"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["Gabriel Menezes <gabriel.jorge.menezes@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/Gab-Menezes/phrase_search"
+description = "Extremely fast phrase search implementation."
+keywords = ["fast", "simd", "phrase", "search", "information", "retrieval"]
+categories = ["search-engine", "data-structures"]
 
 [dependencies]
 heed = "0.21.0"
