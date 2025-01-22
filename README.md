@@ -11,6 +11,8 @@ work can be found in [here](https://gab-menezes.github.io/2025/01/13/using-the-m
 
 This crate uses the [log] crate for logging during indexing.
 
+It's highly recommended to compile this crate with `-C llvm-args=-align-all-functions=6`.
+
 ## Usage
 
 ```rust
