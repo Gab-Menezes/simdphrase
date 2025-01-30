@@ -334,7 +334,7 @@ impl Indexer {
         };
         match common_tokens {
             CommonTokens::List(tokens) => tokens
-                .into_iter()
+                .iter()
                 .map(|t| t.to_string().clone().into_boxed_str())
                 .collect(),
             CommonTokens::FixedNumber(max) => {

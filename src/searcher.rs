@@ -8,6 +8,7 @@ use rkyv::{de::Pool, rancor::Strategy, Archive, Deserialize};
 
 /// Final result of a search operation.
 pub struct SearchResult<'a, D: Document>(pub Result<Vec<u32>, SearchError>, &'a Searcher<D>);
+
 impl<D: Document> SearchResult<'_, D> {
     /// Number of documents that matched the search query.
     pub fn len(&self) -> Option<usize> {

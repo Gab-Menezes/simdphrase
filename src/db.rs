@@ -209,7 +209,7 @@ mod db_constants {
     pub const TEMP_FILE_TOKEN_TO_PACKED: &str = "temp_token_to_packed";
 }
 
-pub const MAX_WINDOW_LEN: NonZero<usize> = unsafe { NonZero::new_unchecked(3) };
+pub const MAX_WINDOW_LEN: NonZero<usize> = NonZero::new(3).unwrap();
 
 #[derive(Debug, Serialize, Archive)]
 struct Offset {
@@ -578,14 +578,14 @@ impl<D: Document> Db<D> {
     // This function neeeds to be inline never, for some reason inlining this
     // function makes some queries performance unpredictable
     #[inline(never)]
-    fn merge_and_minimize_tokens<'a, 'b, 'alloc>(
+    fn merge_and_minimize_tokens<'a, 'b>(
         &self,
         rotxn: &RoTxn,
         tokens: RefTokens<'a>,
         common_tokens: &HashSet<Box<str>>,
         mmap: &'b Mmap,
 
-        bump: &'alloc Bump,
+        bump: &Bump,
     ) -> Result<
         (
             Vec<RefTokens<'a>>,
@@ -626,7 +626,7 @@ impl<D: Document> Db<D> {
         }
 
         #[allow(clippy::too_many_arguments)]
-        fn inner_merge_and_minimize_tokens<'a, 'b, 'c, 'alloc, D: Document>(
+        fn inner_merge_and_minimize_tokens<'a, 'b, 'alloc, D: Document>(
             me: &Db<D>,
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
@@ -732,7 +732,7 @@ impl<D: Document> Db<D> {
         // This function neeeds to be inline never, for some reason inlining this
         // function makes some queries performance unpredictable
         #[inline(never)]
-        fn no_common_tokens<'a, 'b, 'alloc, D: Document>(
+        fn no_common_tokens<'a, 'b, D: Document>(
             me: &Db<D>,
             rotxn: &RoTxn,
             tokens: RefTokens<'a>,
@@ -754,7 +754,7 @@ impl<D: Document> Db<D> {
                 v.push(token);
             }
 
-            return Ok((v, token_to_packed));
+            Ok((v, token_to_packed))
         }
 
         if common_tokens.is_empty() {
@@ -815,7 +815,7 @@ impl<D: Document> Db<D> {
         }
 
         mmap.advise_range(memmap2::Advice::Sequential, begin, len)
-            .map_err(|e| DatabaseError::from(e))?;
+            .map_err(DatabaseError::from)?;
 
         Ok(BorrowRoaringishPacked::new_raw(packed))
     }
@@ -830,7 +830,7 @@ impl<D: Document> Db<D> {
         let offset = self
             .db_token_to_offsets
             .get(rotxn, token)
-            .map_err(|e| DatabaseError::from(e))?;
+            .map_err(DatabaseError::from)?;
         match offset {
             Some(offset) => Self::roaringish_packed_from_offset(offset, mmap),
             None => Err(SearchError::TokenNotFound(token.to_string())),
@@ -857,7 +857,7 @@ impl<D: Document> Db<D> {
             return Err(SearchError::EmptyQuery);
         }
 
-        let rotxn = self.env.read_txn().map_err(|e| DatabaseError::from(e))?;
+        let rotxn = self.env.read_txn().map_err(DatabaseError::from)?;
         if tokens.len() == 1 {
             // this can't failt, we just checked
             self.roaringish_packed(&rotxn, tokens.first().unwrap(), mmap)?
@@ -994,7 +994,7 @@ impl<D: Document> Db<D> {
     ) -> Result<&'a D::Archived, DocumentError> {
         self.db_doc_id_to_document
             .get(rotxn, doc_id)
-            .map_err(|e| DatabaseError::from(e))?
+            .map_err(DatabaseError::from)?
             .ok_or(DocumentError::DocumentNotFound(*doc_id))
     }
 
@@ -1003,9 +1003,9 @@ impl<D: Document> Db<D> {
         doc_ids: &[u32],
         cb: impl FnOnce(Vec<&D::Archived>),
     ) -> Result<(), DocumentError> {
-        let rotxn = self.env.read_txn().map_err(|e| DatabaseError::from(e))?;
+        let rotxn = self.env.read_txn().map_err(DatabaseError::from)?;
         let docs = doc_ids
-            .into_iter()
+            .iter()
             .map(|doc_id| self.inner_get_archived_document(&rotxn, doc_id))
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1019,7 +1019,7 @@ impl<D: Document> Db<D> {
         doc_id: u32,
         cb: impl FnOnce(&D::Archived),
     ) -> Result<(), DocumentError> {
-        let rotxn = self.env.read_txn().map_err(|e| DatabaseError::from(e))?;
+        let rotxn = self.env.read_txn().map_err(DatabaseError::from)?;
         let doc = self.inner_get_archived_document(&rotxn, &doc_id)?;
 
         cb(doc);
@@ -1031,9 +1031,9 @@ impl<D: Document> Db<D> {
     where
         <D as Archive>::Archived: Deserialize<D, Strategy<Pool, rkyv::rancor::Error>>,
     {
-        let rotxn = self.env.read_txn().map_err(|e| DatabaseError::from(e))?;
+        let rotxn = self.env.read_txn().map_err(DatabaseError::from)?;
         doc_ids
-            .into_iter()
+            .iter()
             .map(|doc_id| {
                 let archived = self.inner_get_archived_document(&rotxn, doc_id)?;
                 rkyv::deserialize::<D, rkyv::rancor::Error>(archived)
@@ -1046,7 +1046,7 @@ impl<D: Document> Db<D> {
     where
         <D as Archive>::Archived: Deserialize<D, Strategy<Pool, rkyv::rancor::Error>>,
     {
-        let rotxn = self.env.read_txn().map_err(|e| DatabaseError::from(e))?;
+        let rotxn = self.env.read_txn().map_err(DatabaseError::from)?;
         let archived = self.inner_get_archived_document(&rotxn, &doc_id)?;
         rkyv::deserialize::<D, rkyv::rancor::Error>(archived)
             .map_err(|e| DocumentError::DatabaseError(DatabaseError::from(e)))
