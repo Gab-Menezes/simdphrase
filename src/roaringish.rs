@@ -4,13 +4,14 @@ use intersect::{
     gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond, Intersect,
 };
 use rkyv::{with::InlineAsBox, Archive, Serialize};
+#[cfg(target_feature = "avx512f")]
+use std::arch::x86_64::_mm256_mask_compressstoreu_epi32;
 use std::{
-    arch::x86_64::_mm256_mask_compressstoreu_epi32,
     fmt::{Binary, Debug, Display},
     marker::PhantomData,
     mem::MaybeUninit,
     ops::Deref,
-    simd::{cmp::SimdPartialEq, num::SimdUint, LaneCount, Simd, SupportedLaneCount},
+    simd::{num::SimdUint, LaneCount, Simd, SupportedLaneCount},
     sync::atomic::Ordering::Relaxed,
 };
 
@@ -50,7 +51,8 @@ const fn pack_value(value: u16) -> u64 {
     1 << value
 }
 
-/// Packs a document ID and group together (they should already be in their packed form)
+/// Packs a document ID and group together (they should already be in their
+/// packed form)
 const fn pack_doc_id_group(packed_doc_id: u64, group: u16) -> u64 {
     packed_doc_id | pack_group(group)
 }
@@ -183,14 +185,15 @@ impl<'a, A> RoaringishPackedKind<'a, A> {
 }
 
 /// Main data structure used for phrase search.
+///
 /// In here we store a compact representation of the
 /// document IDs and positions.
 ///
 /// The representation should be in the form:
-/// ```
-/// document ID | group   | values
-///   32 bits   | 16 bits | 16 bits
-/// ```
+///
+/// | document ID | group   | values
+/// |-------------|---------|---------
+/// |  32 bits    | 16 bits | 16 bits
 ///
 /// So the packed fits into 64 bits.
 ///
@@ -407,8 +410,8 @@ impl<'a> BorrowRoaringishPacked<'a, Aligned> {
 
     /// Merges the results of the first and second phase of the intersection.
     ///
-    /// This function neeeds to be inline always, for some reason not inlining this
-    /// function makes some queries performance unpredictable
+    /// This function neeeds to be inline always, for some reason not inlining
+    /// this function makes some queries performance unpredictable
     #[inline(always)]
     fn merge_results(
         packed: Vec<u64, Aligned64>,
@@ -512,7 +515,7 @@ impl<A> BorrowRoaringishPacked<'_, A> {
     /// Gets the distinct document IDs from the Roaringish Packed.
     #[cfg(not(target_feature = "avx512f"))]
     #[inline(always)]
-    pub fn get_doc_ids(&self, stats: &Stats) -> Vec<u32> {
+    pub fn document_ids(&self, stats: &Stats) -> Vec<u32> {
         if self.0.is_empty() {
             return Vec::new();
         }
@@ -543,16 +546,16 @@ impl<A> BorrowRoaringishPacked<'_, A> {
         i += 1;
 
         stats
-            .get_doc_ids
+            .document_ids
             .fetch_add(b.elapsed().as_micros() as u64, Relaxed);
 
         unsafe { Vec::from_raw_parts(Box::into_raw(doc_ids) as *mut _, i, self.0.len()) }
     }
 
-    /// Gets the distinct document IDs from the Roaringish Packed.
+    /// Returns the distinct document IDs from the Roaringish Packed.
     #[cfg(target_feature = "avx512f")]
     #[inline(always)]
-    pub fn get_doc_ids(&self, stats: &Stats) -> Vec<u32> {
+    pub fn document_ids(&self, stats: &Stats) -> Vec<u32> {
         if self.0.is_empty() {
             return Vec::new();
         }

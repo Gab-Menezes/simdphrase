@@ -2,7 +2,7 @@ use thiserror::Error;
 
 /// Possible errors that can occur while interacting with the database.
 #[derive(Error, Debug)]
-pub enum DbError {
+pub enum DatabaseError {
     #[error("Io error: {0}")]
     IoError(#[from] std::io::Error),
 
@@ -23,7 +23,7 @@ pub enum DbError {
 #[derive(Error, Debug)]
 pub enum SearchError {
     #[error("Db error: {0}")]
-    DbError(#[from] DbError),
+    DatabaseError(#[from] DatabaseError),
 
     #[error("Searched query is empty")]
     EmptyQuery,
@@ -43,9 +43,9 @@ pub enum SearchError {
 
 /// Possible errors when trying to retrieve documents by their internal ID.
 #[derive(Error, Debug)]
-pub enum GetDocumentError {
+pub enum DocumentError {
     #[error("Db error: {0}")]
-    DbError(#[from] DbError),
+    DatabaseError(#[from] DatabaseError),
 
     #[error("Document with id `{0}` not found")]
     DocumentNotFound(u32),
