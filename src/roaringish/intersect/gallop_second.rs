@@ -79,12 +79,12 @@ impl Intersect for GallopIntersectSecond {
                 }
             }
 
-            // // In micro benchmarking doing this version seems faster, but in the real
-            // // use case is slower
+            // // In micro benchmarking doing this version seems faster, but in
+            // the real // use case is slower
 
-            // let intersection = lhs_values.rotate_left(lhs_len as u32) & lsb_mask & rhs_values;
-            // if lhs_doc_id_group == rhs_doc_id_group && intersection > 0 {
-            //     unsafe {
+            // let intersection = lhs_values.rotate_left(lhs_len as u32) &
+            // lsb_mask & rhs_values; if lhs_doc_id_group ==
+            // rhs_doc_id_group && intersection > 0 {     unsafe {
             //         packed_result
             //         .get_unchecked_mut(*i)
             //         .write(lhs_doc_id_group | intersection as u64);

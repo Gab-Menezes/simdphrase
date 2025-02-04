@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering::Relaxed},
 };
 
-/// Time stats collected during search.
+/// Timing statistics collected during search.
 #[derive(Default)]
 pub struct Stats {
     /// Time spent during normalization and tokenization.
@@ -38,7 +38,7 @@ pub struct Stats {
     pub merge_phases_second_pass: AtomicU64,
 
     /// Time spent getting document ids.
-    pub get_doc_ids: AtomicU64,
+    pub document_ids: AtomicU64,
 
     /// Number of calls to the search function.
     pub iters: AtomicU64,
@@ -54,7 +54,7 @@ impl Debug for Stats {
             + self.second_intersect.load(Relaxed)
             + self.merge_phases_first_pass.load(Relaxed)
             + self.merge_phases_second_pass.load(Relaxed)
-            + self.get_doc_ids.load(Relaxed);
+            + self.document_ids.load(Relaxed);
         let sum = sum as f64;
 
         let normalize_tokenize = self.normalize_tokenize.load(Relaxed) as f64;
@@ -71,7 +71,7 @@ impl Debug for Stats {
         let second_intersect_gallop = self.second_intersect_gallop.load(Relaxed) as f64;
         let merge_phases_first_pass = self.merge_phases_first_pass.load(Relaxed) as f64;
         let merge_phases_second_pass = self.merge_phases_second_pass.load(Relaxed) as f64;
-        let get_doc_ids = self.get_doc_ids.load(Relaxed) as f64;
+        let document_ids = self.document_ids.load(Relaxed) as f64;
         let iters = self.iters.load(Relaxed) as f64;
 
         let per_normalize_tokenize = normalize_tokenize / sum * 100f64;
@@ -82,7 +82,7 @@ impl Debug for Stats {
         let per_second_intersect = second_intersect / sum * 100f64;
         let per_merge_phases_first_pass = merge_phases_first_pass / sum * 100f64;
         let per_merge_phases_second_pass = merge_phases_second_pass / sum * 100f64;
-        let per_get_doc_ids = get_doc_ids / sum * 100f64;
+        let per_document_ids = document_ids / sum * 100f64;
 
         f.debug_struct("Stats")
             .field(
@@ -198,11 +198,11 @@ impl Debug for Stats {
                 ),
             )
             .field(
-                "get_doc_ids",
+                "document_ids",
                 &format_args!(
-                    "               ({:08.3}ms, {:08.3}us/iter, {per_get_doc_ids:06.3}%)",
-                    get_doc_ids / 1000f64,
-                    get_doc_ids / iters,
+                    "               ({:08.3}ms, {:08.3}us/iter, {per_document_ids:06.3}%)",
+                    document_ids / 1000f64,
+                    document_ids / iters,
                 ),
             )
             .finish()

@@ -1,9 +1,9 @@
 use std::{cmp::Reverse, collections::HashSet, path::Path};
 
 use crate::{
-    db::{Document, DB, MAX_WINDOW_LEN},
+    db::{Db, Document, MAX_WINDOW_LEN},
     decreasing_window_iter::DecreasingWindows,
-    error::DbError,
+    error::DatabaseError,
     roaringish::MAX_VALUE,
     utils::{normalize, tokenize},
     RoaringishPacked, Searcher,
@@ -18,51 +18,54 @@ use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 pub enum CommonTokens {
     /// Fixed list specified by the user.
     List(HashSet<String>),
-    /// Top `n` most frequent tokens.
-    FixedNum(u32),
-    /// Percentage of the top `n` most frequent tokens.
+    /// Top most frequent tokens.
+    FixedNumber(u32),
+    /// Percentage of the top most frequent tokens.
     Percentage(f64),
 }
 
 /// Batch of documents to be indexed.
 #[derive(Debug)]
 struct Batch<D: Document> {
-    /// Monotonically increasing batch id.
+    /// Monotonically increasing batch ID.
     batch_id: u32,
 
     /// Used to estimate the number of distinct tokens.
     hllp_tokens: HyperLogLogPlus<Box<str>, gxhash::GxBuildHasher>,
 
-    /// Monotonically increasing token id (cleared after each batch).
+    /// Monotonically increasing token ID (cleared after each batch).
     next_token_id: u32,
 
-    /// Maps tokens to token ids (cleared after each batch).
+    /// Maps tokens to token IDs (cleared after each batch).
     token_to_token_id: GxHashMap<Box<str>, u32>,
 
-    /// Maps token ids to their roaringish packed data (cleared after each batch).
+    /// Maps token ids to their roaringish packed data (cleared after each
+    /// batch).
     ///
     /// This should be in sync with `token_id_to_token`
     token_id_to_roaringish_packed: Vec<RoaringishPacked>,
+
     /// Maps token ids to tokens (cleared after each batch).
     ///
     /// This should be in sync with `token_id_to_roaringish_packed`
     token_id_to_token: Vec<Box<str>>,
 
     // this 3 containers are in sync
-    /// Document ids in the batch (cleared after each batch).
+    /// Document IDs in the batch (cleared after each batch).
     ///
-    /// This should be in sync with `documents` and `tokenized_docs`.
-    doc_ids: Vec<u32>,
+    /// This should be in sync with `documents` and `tokenized_documents`.
+    document_ids: Vec<u32>,
+
     /// Documents in the batch (cleared after each batch).
     ///
-    /// This should be in sync with `doc_ids` and `tokenized_docs`.
+    /// This should be in sync with `document_ids` and `tokenized_documents`.
     documents: Vec<D>,
 
-    /// Tokenized representation of the documents in the batch (cleared after each batch).
-    /// This representation is done by storing the token id.
+    /// Tokenized representation of the documents in the batch (cleared after
+    /// each batch). This representation is done by storing the token id.
     ///
-    /// This should be in sync with `doc_ids` and `documents`.
-    tokenized_docs: Vec<Vec<u32>>,
+    /// This should be in sync with `document_ids` and `documents`.
+    tokenized_documents: Vec<Vec<u32>>,
 }
 
 impl<D: Document> Batch<D> {
@@ -76,46 +79,48 @@ impl<D: Document> Batch<D> {
             token_to_token_id: GxHashMap::new(),
             token_id_to_roaringish_packed: Vec::new(),
             token_id_to_token: Vec::new(),
-            doc_ids: Vec::new(),
+            document_ids: Vec::new(),
             documents: Vec::new(),
-            tokenized_docs: Vec::new(),
+            tokenized_documents: Vec::new(),
         }
     }
 
-    /// Get an overestimated number of distinct tokens.
+    /// Return an overestimated number of distinct tokens.
     fn estimate_number_of_distinct_tokens(&mut self) -> u64 {
         (self.hllp_tokens.count() * 1.015f64) as u64
     }
 
     /// Clears the batch.
     ///
-    /// This should be called after each flush and before the start of a new batch.
+    /// This should be called after each flush and before the start of a new
+    /// batch.
     fn clear(&mut self) {
         self.next_token_id = 0;
         self.token_to_token_id.clear();
         self.token_id_to_roaringish_packed.clear();
         self.token_id_to_token.clear();
 
-        self.doc_ids.clear();
+        self.document_ids.clear();
         self.documents.clear();
-        self.tokenized_docs.clear();
+        self.tokenized_documents.clear();
     }
 
     /// Adds a document to the batch and starts the indexing process.
     ///
     /// `count_freq` is used to count the frequency of each token. This should
-    /// only be used in the first batch, allowing us to generate the common tokens.
-    fn push(&mut self, doc_id: u32, content: &str, doc: D, count_freq: impl FnMut(&str)) {
-        let tokenized_doc = self.index_doc(content, doc_id, count_freq);
-        self.doc_ids.push(doc_id);
+    /// only be used in the first batch, allowing us to generate the common
+    /// tokens.
+    fn push(&mut self, document_id: u32, content: &str, doc: D, count_freq: impl FnMut(&str)) {
+        let tokenized_doc = self.index_doc(content, document_id, count_freq);
+        self.document_ids.push(document_id);
         self.documents.push(doc);
-        self.tokenized_docs.push(tokenized_doc);
+        self.tokenized_documents.push(tokenized_doc);
     }
 
-    /// Get the token id for the input `token`. If the token is not present in the
-    /// in the batch then it's added and a new token id is generated by incrementing
-    /// the current value.
-    fn get_token_id(
+    /// Get the token id for the input `token`. If the token is not present in
+    /// the in the batch then it's added and a new token id is generated by
+    /// incrementing the current value.
+    fn token_id(
         token: &str,
         hllp_tokens: &mut HyperLogLogPlus<Box<str>, gxhash::GxBuildHasher>,
         token_to_token_id: &mut GxHashMap<Box<str>, u32>,
@@ -145,18 +150,19 @@ impl<D: Document> Batch<D> {
     /// Indexes `content`s for this `doc_id`.
     ///
     /// `count_freq` is used to count the frequency of each token. This should
-    /// only be used in the first batch, allowing us to generate the common tokens.
+    /// only be used in the first batch, allowing us to generate the common
+    /// tokens.
     fn index_doc(
         &mut self,
         content: &str,
-        doc_id: u32,
+        document_id: u32,
         mut count_freq: impl FnMut(&str),
     ) -> Vec<u32> {
         let mut tokenized_doc = Vec::new();
         let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
         let content = normalize(content);
         for (pos, token) in tokenize(&content).enumerate().take(MAX_VALUE as usize) {
-            let token_id = Self::get_token_id(
+            let token_id = Self::token_id(
                 token,
                 &mut self.hllp_tokens,
                 &mut self.token_to_token_id,
@@ -175,7 +181,7 @@ impl<D: Document> Batch<D> {
         }
 
         for (token_id, positions) in token_id_to_positions.iter() {
-            self.token_id_to_roaringish_packed[*token_id as usize].push(doc_id, positions);
+            self.token_id_to_roaringish_packed[*token_id as usize].push(document_id, positions);
         }
         tokenized_doc
     }
@@ -183,16 +189,16 @@ impl<D: Document> Batch<D> {
     /// Flushes the batch.
     fn flush(
         &mut self,
-        db: &DB<D>,
+        db: &Db<D>,
         rwtxn: &mut RwTxn,
         common_tokens: &HashSet<Box<str>>,
         mmap_size: &mut usize,
-    ) -> Result<(), DbError> {
+    ) -> Result<(), DatabaseError> {
         log::info!("Flushing batch");
         let b = std::time::Instant::now();
 
         // Nothing to do if the batch is empty.
-        if self.doc_ids.is_empty() {
+        if self.document_ids.is_empty() {
             log::debug!("Empty batch, nothing to flush");
             return Ok(());
         }
@@ -205,7 +211,7 @@ impl<D: Document> Batch<D> {
             mmap_size,
             self.batch_id,
         )?;
-        db.write_doc_id_to_document(rwtxn, &self.doc_ids, &self.documents)?;
+        db.write_doc_id_to_document(rwtxn, &self.document_ids, &self.documents)?;
 
         self.batch_id += 1;
         self.clear();
@@ -214,19 +220,25 @@ impl<D: Document> Batch<D> {
     }
 
     /// Merges the tokens for all of the documents in the batch.
+    ///
     /// This will create new tokens and consequently new token ids.
     ///
-    /// The generation is done by merging up to [MAX_WINDOW_LEN] tokens at a time.
-    /// We are only allowed to merge:
+    /// The generation is done by merging up to [`MAX_WINDOW_LEN`] tokens at a
+    /// time. We are only allowed to merge:
+    ///
     /// * Common tokens with other common tokens.
+    ///
     /// * Rare tokens with a common token.
+    ///
     /// * Common tokens with a rare token.
     ///
     /// So if it's impossible for the generated token to have two rare tokens.
-    /// Also if rare tokens can only be in the first or last position, for example:
+    /// Also if rare tokens can only be in the first or last position, for
+    /// example:
     ///
     /// # Examples
-    /// ```
+    ///
+    /// ```text
     /// c c
     /// c c c
     /// r c
@@ -243,7 +255,11 @@ impl<D: Document> Batch<D> {
         }
 
         let b = std::time::Instant::now();
-        for (tokenized_doc, doc_id) in self.tokenized_docs.iter().zip(self.doc_ids.iter()) {
+        for (tokenized_doc, doc_id) in self
+            .tokenized_documents
+            .iter()
+            .zip(self.document_ids.iter())
+        {
             let mut token_id_to_positions: FxHashMap<u32, Vec<u32>> = FxHashMap::new();
             let it = DecreasingWindows::new(tokenized_doc, MAX_WINDOW_LEN);
             for (pos, token_ids) in it.enumerate() {
@@ -263,7 +279,7 @@ impl<D: Document> Batch<D> {
                         .map(|token_id| self.token_id_to_token[*token_id as usize].as_ref())
                         .intersperse(" ")
                         .collect();
-                    let token_id = Self::get_token_id(
+                    let token_id = Self::token_id(
                         &token,
                         &mut self.hllp_tokens,
                         &mut self.token_to_token_id,
@@ -298,8 +314,9 @@ pub struct Indexer {
 impl Indexer {
     /// Creates a new indexer.
     ///
-    /// * If `batch_size` is [None] then the indexer will index all the documents in a single batch.
-    /// * If `common_tokens` is [None] then merging will happen.
+    /// * If `batch_size` is [`None`] then the indexer will index all the
+    ///   documents in a single batch.
+    /// * If `common_tokens` is `None` then merging will happen.
     pub fn new(batch_size: Option<u32>, common_tokens: Option<CommonTokens>) -> Self {
         Self {
             batch_size,
@@ -307,8 +324,7 @@ impl Indexer {
         }
     }
 
-    /// Generates the list of common tokens to be used
-    /// in the merging phase
+    /// Generates the list of common tokens to be usedin the merging phase,
     fn generate_common_tokens(
         &self,
         token_to_freq: &GxHashMap<Box<str>, u32>,
@@ -321,7 +337,7 @@ impl Indexer {
                 .into_iter()
                 .map(|t| t.to_string().clone().into_boxed_str())
                 .collect(),
-            CommonTokens::FixedNum(max) => {
+            CommonTokens::FixedNumber(max) => {
                 let max = (*max as usize).min(token_to_freq.len());
                 let mut token_to_freq: Vec<_> = token_to_freq.iter().collect();
                 token_to_freq.sort_unstable_by_key(|(_, freq)| Reverse(*freq));
@@ -345,14 +361,21 @@ impl Indexer {
     /// Indexes an iterator of documents.
     ///
     /// This iterator should essentially return a tuple `(&str, D)`, where
-    /// `D` is the form of the document that will be serialized and stored in the database.
+    /// `D` is the form of the document that will be serialized and stored in
+    /// the database.
     ///
-    /// So the content of the document (`&str`) can be different from the stored version (`D`).
+    /// So the content of the document (`&str`) can be different from the stored
+    /// version (`D`).
     ///
-    /// The type `D` is anything that can be serialized by [rkyv].
-    /// 
-    /// This returns a [Searcher] object and the number of indexed documents.
-    pub fn index<S, D, I, P>(&self, docs: I, path: P, db_size: usize) -> Result<(Searcher<D>, u32), DbError>
+    /// The type `D` is anything that can be serialized by [`rkyv`](https://docs.rs/rkyv).
+    ///
+    /// This returns a [`Searcher`] object and the number of indexed documents.
+    pub fn index<S, D, I, P>(
+        &self,
+        docs: I,
+        path: P,
+        db_size: usize,
+    ) -> Result<(Searcher<D>, u32), DatabaseError>
     where
         S: AsRef<str>,
         I: IntoIterator<Item = (S, D)>,
@@ -360,7 +383,7 @@ impl Indexer {
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let db = DB::truncate(path, db_size)?;
+        let db = Db::truncate(path, db_size)?;
         let mut rwtxn = db.env.write_txn()?;
 
         let mut batch = Batch::new();
