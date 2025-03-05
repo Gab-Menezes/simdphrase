@@ -1,12 +1,12 @@
 use std::{mem::MaybeUninit, sync::atomic::Ordering::Relaxed};
 
 use crate::{
-    allocator::Aligned64,
-    roaringish::{clear_values, unpack_values, Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP},
     Stats,
+    allocator::Aligned64,
+    roaringish::{ADD_ONE_GROUP, Aligned, BorrowRoaringishPacked, clear_values, unpack_values},
 };
 
-use super::{private::IntersectSeal, Intersect, Intersection};
+use super::{Intersect, Intersection, private::IntersectSeal};
 
 /// Naive intersection algorithm.
 pub struct NaiveIntersect;

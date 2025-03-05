@@ -1,5 +1,5 @@
 use std::{
-    alloc::{alloc, dealloc, Allocator},
+    alloc::{Allocator, alloc, dealloc},
     ptr::NonNull,
 };
 
@@ -29,10 +29,12 @@ unsafe impl<const N: usize> Allocator for AlignedAllocator<N> {
     }
 
     unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout) {
-        // This probably will never fail, if it does
-        // what can I do ? Let it crash, something
-        // went wrong.
-        dealloc(ptr.as_ptr(), layout.align_to(N).unwrap());
+        unsafe {
+            // This probably will never fail, if it does
+            // what can I do ? Let it crash, something
+            // went wrong.
+            dealloc(ptr.as_ptr(), layout.align_to(N).unwrap());
+        }
     }
 }
 

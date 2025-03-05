@@ -1,11 +1,11 @@
 use std::{mem::MaybeUninit, sync::atomic::Ordering::Relaxed};
 
 use crate::{
-    roaringish::{clear_values, unpack_values, Aligned},
     Aligned64, BorrowRoaringishPacked, Stats,
+    roaringish::{Aligned, clear_values, unpack_values},
 };
 
-use super::{private::IntersectSeal, Intersect, Intersection};
+use super::{Intersect, Intersection, private::IntersectSeal};
 
 pub struct GallopIntersectSecond;
 impl IntersectSeal for GallopIntersectSecond {}

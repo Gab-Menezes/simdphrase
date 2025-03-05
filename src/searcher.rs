@@ -1,8 +1,8 @@
 use std::{collections::HashSet, path::Path};
 
-use crate::{db::Document, error::GetDocumentError, DbError, Intersection, SearchError, Stats, DB};
+use crate::{DB, DbError, Intersection, SearchError, Stats, db::Document, error::GetDocumentError};
 use memmap2::Mmap;
-use rkyv::{de::Pool, rancor::Strategy, Archive, Deserialize};
+use rkyv::{Archive, Deserialize, de::Pool, rancor::Strategy};
 
 /// Final result of a search operation.
 pub struct SearchResult<'a, D: Document>(pub Result<Vec<u32>, SearchError>, &'a Searcher<D>);

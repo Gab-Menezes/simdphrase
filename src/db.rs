@@ -1,11 +1,12 @@
 use bumpalo::Bump;
 use gxhash::{HashMap as GxHashMap, HashMapExt};
 use heed::{
-    types::Str, Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn,
-    Unspecified,
+    Database, DatabaseFlags, Env, EnvFlags, EnvOpenOptions, PutFlags, RoTxn, RwTxn, Unspecified,
+    types::Str,
 };
 use memmap2::{Mmap, MmapMut};
 use rkyv::{
+    Archive, Archived, Deserialize, Serialize,
     api::high::HighSerializer,
     de::Pool,
     deserialize,
@@ -13,11 +14,10 @@ use rkyv::{
     ser::{allocator::ArenaHandle, writer::IoWriter},
     util::AlignedVec,
     with::InlineAsBox,
-    Archive, Archived, Deserialize, Serialize,
 };
 use std::{
     cmp::Reverse,
-    collections::{hash_map::Entry, BinaryHeap, HashSet},
+    collections::{BinaryHeap, HashSet, hash_map::Entry},
     fmt::Debug,
     fs::File,
     hash::Hash,
@@ -29,12 +29,13 @@ use std::{
 };
 
 use crate::{
+    BorrowRoaringishPacked, Intersection, RoaringishPacked,
     codecs::{NativeU32, ZeroCopyCodec},
     error::{DbError, GetDocumentError, SearchError},
     normalize,
     roaringish::{Aligned, ArchivedBorrowRoaringishPacked, RoaringishPackedKind, Unaligned},
     stats::Stats,
-    tokenize, BorrowRoaringishPacked, Intersection, RoaringishPacked,
+    tokenize,
 };
 
 struct Tokens {
@@ -344,17 +345,19 @@ impl<D: Document> DB<D> {
             mmap_offset: &mut usize,
             bytes: &[u8],
         ) -> Offset {
-            let ptr = mmap.as_ptr().add(*mmap_offset);
-            let offset = ptr.align_offset(N);
+            unsafe {
+                let ptr = mmap.as_ptr().add(*mmap_offset);
+                let offset = ptr.align_offset(N);
 
-            *mmap_offset += offset;
-            mmap[*mmap_offset..*mmap_offset + bytes.len()].copy_from_slice(bytes);
+                *mmap_offset += offset;
+                mmap[*mmap_offset..*mmap_offset + bytes.len()].copy_from_slice(bytes);
 
-            let begin = *mmap_offset;
-            *mmap_offset += bytes.len();
-            Offset {
-                begin: begin as u64,
-                len: bytes.len() as u64,
+                let begin = *mmap_offset;
+                *mmap_offset += bytes.len();
+                Offset {
+                    begin: begin as u64,
+                    len: bytes.len() as u64,
+                }
             }
         }
 

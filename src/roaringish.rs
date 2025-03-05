@@ -1,21 +1,21 @@
 pub mod intersect;
 
 use intersect::{
-    gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond, Intersect,
+    Intersect, gallop_first::GallopIntersectFirst, gallop_second::GallopIntersectSecond,
 };
-use rkyv::{with::InlineAsBox, Archive, Serialize};
+use rkyv::{Archive, Serialize, with::InlineAsBox};
 use std::{
     arch::x86_64::_mm256_mask_compressstoreu_epi32,
     fmt::{Binary, Debug, Display},
     marker::PhantomData,
     mem::MaybeUninit,
     ops::Deref,
-    simd::{cmp::SimdPartialEq, num::SimdUint, LaneCount, Simd, SupportedLaneCount},
+    simd::{LaneCount, Simd, SupportedLaneCount, cmp::SimdPartialEq, num::SimdUint},
     sync::atomic::Ordering::Relaxed,
 };
 
 use crate::Stats;
-use crate::{allocator::Aligned64, Intersection};
+use crate::{Intersection, allocator::Aligned64};
 
 pub const MAX_VALUE: u32 = 16u32 * u16::MAX as u32;
 pub const ADD_ONE_GROUP: u64 = u16::MAX as u64 + 1;
@@ -144,20 +144,22 @@ impl<'a, A> RoaringishPackedKind<'a, A> {
     /// Concatenates two Roaringish Packed together
     pub fn concat<'b: 'a>(self, other: RoaringishPackedKind<'b, A>) -> RoaringishPackedKind<'b, A> {
         unsafe fn copy_data<T, U>(dest: &mut [MaybeUninit<T>], lhs: &[U], rhs: &[U]) {
-            let (l, buf, r) = dest.align_to_mut::<MaybeUninit<u8>>();
-            assert!(l.is_empty());
-            assert!(r.is_empty());
+            unsafe {
+                let (l, buf, r) = dest.align_to_mut::<MaybeUninit<u8>>();
+                assert!(l.is_empty());
+                assert!(r.is_empty());
 
-            let (l, lhs, r) = lhs.align_to::<MaybeUninit<u8>>();
-            assert!(l.is_empty());
-            assert!(r.is_empty());
+                let (l, lhs, r) = lhs.align_to::<MaybeUninit<u8>>();
+                assert!(l.is_empty());
+                assert!(r.is_empty());
 
-            let (l, rhs, r) = rhs.align_to::<MaybeUninit<u8>>();
-            assert!(l.is_empty());
-            assert!(r.is_empty());
+                let (l, rhs, r) = rhs.align_to::<MaybeUninit<u8>>();
+                assert!(l.is_empty());
+                assert!(r.is_empty());
 
-            buf[0..lhs.len()].copy_from_slice(lhs);
-            buf[lhs.len()..].copy_from_slice(rhs);
+                buf[0..lhs.len()].copy_from_slice(lhs);
+                buf[lhs.len()..].copy_from_slice(rhs);
+            }
         }
 
         let r = match (self, other) {

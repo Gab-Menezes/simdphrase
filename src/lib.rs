@@ -11,20 +11,20 @@
 #![feature(pointer_is_aligned_to)]
 
 //! Extremely fast phrase search implementation.
-//! 
+//!
 //! ## Overview
-//! 
-//! This implementation follows some of the ideas proposed in this 
-//! [blog post](https://softwaredoug.com/blog/2024/01/21/search-array-phrase-algorithm) 
+//!
+//! This implementation follows some of the ideas proposed in this
+//! [blog post](https://softwaredoug.com/blog/2024/01/21/search-array-phrase-algorithm)
 //! by [Doug Turnbull](https://softwaredoug.com/). The full explanation on how the internals
 //! work can be found in [here](https://gab-menezes.github.io/2025/01/13/using-the-most-unhinged-avx-512-instruction-to-make-the-fastest-phrase-search-algo.html).
-//! 
+//!
 //! This crate uses the [log] crate for logging during indexing.
-//! 
+//!
 //! It's highly recommended to compile this crate with `-C llvm-args=-align-all-functions=6`.
-//! 
+//!
 //! ## Usage
-//! 
+//!
 //! ```rust
 //! use phrase_search::{CommonTokens, Indexer, SimdIntersect};
 //!
@@ -77,7 +77,7 @@ pub use stats::Stats;
 
 pub use roaringish::intersect::naive::NaiveIntersect;
 
+pub use roaringish::intersect::Intersection;
 #[cfg(target_feature = "avx512f")]
 pub use roaringish::intersect::simd::SimdIntersect;
-pub use roaringish::intersect::Intersection;
 pub use searcher::{SearchResult, Searcher};

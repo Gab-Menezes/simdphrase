@@ -1,8 +1,8 @@
 use std::{borrow::Cow, marker::PhantomData};
 
 use rkyv::{
-    api::high::HighSerializer, ser::allocator::ArenaHandle, util::AlignedVec, Archive, Archived,
-    Serialize,
+    Archive, Archived, Serialize, api::high::HighSerializer, ser::allocator::ArenaHandle,
+    util::AlignedVec,
 };
 
 pub struct ZeroCopyCodec<T>(PhantomData<T>)

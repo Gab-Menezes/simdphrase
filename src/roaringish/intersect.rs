@@ -1,8 +1,8 @@
 use std::mem::MaybeUninit;
 
-use crate::{allocator::Aligned64, Stats};
+use crate::{Stats, allocator::Aligned64};
 
-use super::{Aligned, BorrowRoaringishPacked, ADD_ONE_GROUP};
+use super::{ADD_ONE_GROUP, Aligned, BorrowRoaringishPacked};
 
 pub mod gallop_first;
 pub mod gallop_second;

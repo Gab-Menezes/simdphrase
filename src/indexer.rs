@@ -1,12 +1,12 @@
 use std::{cmp::Reverse, collections::HashSet, path::Path};
 
 use crate::{
-    db::{Document, DB, MAX_WINDOW_LEN},
+    RoaringishPacked, Searcher,
+    db::{DB, Document, MAX_WINDOW_LEN},
     decreasing_window_iter::DecreasingWindows,
     error::DbError,
     roaringish::MAX_VALUE,
     utils::{normalize, tokenize},
-    RoaringishPacked, Searcher,
 };
 use fxhash::FxHashMap;
 use gxhash::{HashMap as GxHashMap, HashMapExt};
@@ -350,9 +350,14 @@ impl Indexer {
     /// So the content of the document (`&str`) can be different from the stored version (`D`).
     ///
     /// The type `D` is anything that can be serialized by [rkyv].
-    /// 
+    ///
     /// This returns a [Searcher] object and the number of indexed documents.
-    pub fn index<S, D, I, P>(&self, docs: I, path: P, db_size: usize) -> Result<(Searcher<D>, u32), DbError>
+    pub fn index<S, D, I, P>(
+        &self,
+        docs: I,
+        path: P,
+        db_size: usize,
+    ) -> Result<(Searcher<D>, u32), DbError>
     where
         S: AsRef<str>,
         I: IntoIterator<Item = (S, D)>,
